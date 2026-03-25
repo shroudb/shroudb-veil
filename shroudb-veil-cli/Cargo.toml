@@ -1,0 +1,18 @@
+[package]
+name = "shroudb-veil-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "shroudb-veil-cli"
+path = "src/main.rs"
+
+[dependencies]
+shroudb-veil-client.workspace = true
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+rustyline.workspace = true
+serde_json.workspace = true

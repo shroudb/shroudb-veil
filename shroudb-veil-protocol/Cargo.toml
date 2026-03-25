@@ -1,0 +1,45 @@
+[package]
+name = "shroudb-veil-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["embedded"]
+embedded = [
+    "dep:shroudb-transit-protocol",
+    "dep:shroudb-transit-core",
+    "dep:shroudb-core",
+    "dep:shroudb-crypto",
+    "dep:shroudb-storage",
+    "dep:ring",
+    "dep:dashmap",
+    "dep:hex",
+]
+
+[dependencies]
+shroudb-veil-core.workspace = true
+shroudb-transit-client.workspace = true
+
+# Embedded mode: full Transit engine in-process
+shroudb-transit-protocol = { workspace = true, optional = true }
+shroudb-transit-core = { workspace = true, optional = true }
+shroudb-core = { workspace = true, optional = true }
+shroudb-crypto = { workspace = true, optional = true }
+shroudb-storage = { workspace = true, optional = true }
+ring = { workspace = true, optional = true }
+dashmap = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+metrics.workspace = true
+base64.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }

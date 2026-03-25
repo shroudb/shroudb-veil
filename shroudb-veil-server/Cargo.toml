@@ -1,0 +1,48 @@
+[package]
+name = "shroudb-veil-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["embedded"]
+embedded = [
+    "shroudb-veil-protocol/embedded",
+    "dep:shroudb-transit-protocol",
+    "dep:shroudb-transit-core",
+    "dep:shroudb-core",
+    "dep:shroudb-crypto",
+    "dep:shroudb-storage",
+]
+
+[[bin]]
+name = "shroudb-veil"
+path = "src/main.rs"
+
+[dependencies]
+shroudb-veil-core.workspace = true
+shroudb-veil-protocol.workspace = true
+shroudb-transit-client.workspace = true
+
+# Embedded mode deps (optional)
+shroudb-transit-protocol = { workspace = true, optional = true }
+shroudb-transit-core = { workspace = true, optional = true }
+shroudb-core = { workspace = true, optional = true }
+shroudb-crypto = { workspace = true, optional = true }
+shroudb-storage = { workspace = true, optional = true }
+
+tokio.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+tokio-rustls.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+libc.workspace = true

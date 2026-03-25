@@ -1,0 +1,67 @@
+[workspace]
+resolver = "3"
+default-members = ["shroudb-veil-server"]
+members = [
+    "shroudb-veil-core",
+    "shroudb-veil-protocol",
+    "shroudb-veil-server",
+    "shroudb-veil-client",
+    "shroudb-veil-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Internal crates
+shroudb-veil-core = { path = "shroudb-veil-core" }
+shroudb-veil-protocol = { path = "shroudb-veil-protocol" }
+shroudb-veil-client = { path = "shroudb-veil-client" }
+
+# Transit client (from shroudb-transit repo) — always needed for remote mode
+shroudb-transit-client = { git = "https://github.com/shroudb/shroudb-transit.git", tag = "v0.1.0" }
+
+# Transit embedded (from shroudb-transit repo) — optional, for embedded mode
+shroudb-transit-protocol = { git = "https://github.com/shroudb/shroudb-transit.git", tag = "v0.1.0" }
+shroudb-transit-core = { git = "https://github.com/shroudb/shroudb-transit.git", tag = "v0.1.0" }
+
+# Commons crates (from shroudb/commons) — optional, for embedded mode
+shroudb-core = { git = "https://github.com/shroudb/commons.git", tag = "v0.1.0" }
+shroudb-crypto = { git = "https://github.com/shroudb/commons.git", tag = "v0.1.0" }
+shroudb-storage = { git = "https://github.com/shroudb/commons.git", tag = "v0.1.0" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+
+# Crypto
+ring = "0.17"
+
+# Networking
+rustls = "0.23"
+rustls-pki-types = { version = "1", features = ["std"] }
+tokio-rustls = "0.26"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+metrics = "0.24"
+metrics-exporter-prometheus = "0.18"
+
+# Utilities
+thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+dashmap = "6"
+base64 = "0.22"
+hex = "0.4"
+rustyline = { version = "17", features = ["derive"] }
+libc = "0.2"
+zeroize = "1"
