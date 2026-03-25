@@ -14,9 +14,11 @@ pub struct VeilConfig {
     pub search: SearchConfig,
     /// Keyring definitions (used in embedded mode).
     #[serde(default)]
+    #[cfg_attr(not(feature = "embedded"), allow(dead_code))]
     pub keyrings: std::collections::HashMap<String, KeyringConfig>,
     /// Storage config (used in embedded mode).
     #[serde(default)]
+    #[cfg_attr(not(feature = "embedded"), allow(dead_code))]
     pub storage: StorageConfig,
 }
 
@@ -99,6 +101,7 @@ impl Default for ServerConfig {
 
 /// Keyring configuration (embedded mode).
 #[derive(Debug, Deserialize)]
+#[cfg_attr(not(feature = "embedded"), allow(dead_code))]
 pub struct KeyringConfig {
     pub algorithm: String,
     #[serde(default = "default_rotation_days")]
@@ -111,6 +114,7 @@ pub struct KeyringConfig {
 
 /// Storage configuration (embedded mode).
 #[derive(Debug, Deserialize)]
+#[cfg_attr(not(feature = "embedded"), allow(dead_code))]
 pub struct StorageConfig {
     #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
