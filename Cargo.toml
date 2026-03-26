@@ -31,6 +31,7 @@ shroudb-transit-core = { git = "https://github.com/shroudb/shroudb-transit.git",
 # Commons crates (from shroudb/commons) — optional, for embedded mode
 shroudb-core = { git = "https://github.com/shroudb/commons.git", tag = "v0.1.0" }
 shroudb-crypto = { git = "https://github.com/shroudb/commons.git", tag = "v0.1.0" }
+shroudb-protocol-wire = { git = "https://github.com/shroudb/commons.git", tag = "v0.4.0" }
 shroudb-storage = { git = "https://github.com/shroudb/commons.git", tag = "v0.1.0" }
 
 # Async runtime

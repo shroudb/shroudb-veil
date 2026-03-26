@@ -32,6 +32,8 @@ ring = { workspace = true, optional = true }
 dashmap = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 
+shroudb-protocol-wire.workspace = true
+
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

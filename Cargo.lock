@@ -1110,6 +1110,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "obfuskey"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87fe8b243d2fdffa464d500b57ab0a4e9a1c4c9daa6cecb5cb56632209f2f1f7"
+dependencies = [
+ "num-bigint",
+ "num-traits",
+ "thiserror",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1715,7 +1726,6 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "shroudb-core"
 version = "0.1.0"
-source = "git+https://github.com/shroudb/commons.git?tag=v0.1.0#14e61bf6ee04e3082bcb0c57edb591c649379155"
 dependencies = [
  "serde",
  "serde_json",
@@ -1727,7 +1737,6 @@ dependencies = [
 [[package]]
 name = "shroudb-crypto"
 version = "0.1.0"
-source = "git+https://github.com/shroudb/commons.git?tag=v0.1.0#14e61bf6ee04e3082bcb0c57edb591c649379155"
 dependencies = [
  "argon2",
  "base62",
@@ -1747,9 +1756,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shroudb-protocol-wire"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "shroudb-storage"
 version = "0.1.0"
-source = "git+https://github.com/shroudb/commons.git?tag=v0.1.0#14e61bf6ee04e3082bcb0c57edb591c649379155"
 dependencies = [
  "crc32fast",
  "dashmap",
@@ -1769,7 +1785,6 @@ dependencies = [
 [[package]]
 name = "shroudb-transit-client"
 version = "0.1.0"
-source = "git+https://github.com/shroudb/shroudb-transit.git?tag=v0.1.0#e3b055523e0dbd68ca441148c4ca44b8ad5e9f0e"
 dependencies = [
  "base64",
  "rustls",
@@ -1785,9 +1800,9 @@ dependencies = [
 [[package]]
 name = "shroudb-transit-core"
 version = "0.1.0"
-source = "git+https://github.com/shroudb/shroudb-transit.git?tag=v0.1.0#e3b055523e0dbd68ca441148c4ca44b8ad5e9f0e"
 dependencies = [
  "base64",
+ "obfuskey",
  "serde",
  "shroudb-crypto",
  "thiserror",
@@ -1796,7 +1811,6 @@ dependencies = [
 [[package]]
 name = "shroudb-transit-protocol"
 version = "0.1.0"
-source = "git+https://github.com/shroudb/shroudb-transit.git?tag=v0.1.0#e3b055523e0dbd68ca441148c4ca44b8ad5e9f0e"
 dependencies = [
  "base64",
  "dashmap",
@@ -1855,6 +1869,7 @@ dependencies = [
  "serde_json",
  "shroudb-core",
  "shroudb-crypto",
+ "shroudb-protocol-wire",
  "shroudb-storage",
  "shroudb-transit-client",
  "shroudb-transit-core",
