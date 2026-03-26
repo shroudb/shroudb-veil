@@ -20,6 +20,7 @@ pub fn parse_command(strings: Vec<String>) -> Result<Command, CommandError> {
         "PREFIX" => parse_search_args(args).map(Command::Prefix),
         "INDEX" => parse_index_args(args).map(Command::Index),
         "HEALTH" => Ok(Command::Health),
+        "CONFIG" => parse_config(args),
         "AUTH" => parse_auth(args),
         "PIPELINE" => parse_pipeline(&strings),
         _ => Err(CommandError::BadArg {
@@ -169,6 +170,25 @@ fn parse_index_args(args: &[String]) -> Result<IndexArgs, CommandError> {
     })
 }
 
+fn parse_config(args: &[String]) -> Result<Command, CommandError> {
+    let sub = require_arg(args, 0, "subcommand")?;
+    match sub.to_ascii_uppercase().as_str() {
+        "GET" => {
+            let key = require_arg(args, 1, "key")?.to_owned();
+            Ok(Command::ConfigGet { key })
+        }
+        "SET" => {
+            let key = require_arg(args, 1, "key")?.to_owned();
+            let value = require_arg(args, 2, "value")?.to_owned();
+            Ok(Command::ConfigSet { key, value })
+        }
+        "LIST" => Ok(Command::ConfigList),
+        other => Err(CommandError::BadArg {
+            message: format!("unknown CONFIG subcommand: {other}"),
+        }),
+    }
+}
+
 fn parse_auth(args: &[String]) -> Result<Command, CommandError> {
     let token = require_arg(args, 0, "token")?.to_owned();
     Ok(Command::Auth { token })
@@ -188,7 +208,7 @@ fn parse_pipeline(all_strings: &[String]) -> Result<Command, CommandError> {
     }
 
     let verbs = [
-        "FUZZY", "CONTAINS", "EXACT", "PREFIX", "INDEX", "HEALTH", "AUTH",
+        "FUZZY", "CONTAINS", "EXACT", "PREFIX", "INDEX", "HEALTH", "CONFIG", "AUTH",
     ];
 
     let mut commands = Vec::new();

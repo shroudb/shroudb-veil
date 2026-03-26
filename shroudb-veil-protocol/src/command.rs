@@ -22,6 +22,12 @@ pub enum Command {
     Index(IndexArgs),
     /// Health check.
     Health,
+    /// Read a config value.
+    ConfigGet { key: String },
+    /// Set a config value at runtime (in-memory only, no WAL).
+    ConfigSet { key: String, value: String },
+    /// List all config keys with values.
+    ConfigList,
     /// Authenticate the connection.
     Auth { token: String },
     /// Pipeline of sub-commands.
@@ -66,7 +72,12 @@ impl Command {
                 Some(&a.keyring)
             }
             Self::Index(a) => Some(&a.keyring),
-            Self::Health | Self::Auth { .. } | Self::Pipeline(_) => None,
+            Self::Health
+            | Self::ConfigGet { .. }
+            | Self::ConfigSet { .. }
+            | Self::ConfigList
+            | Self::Auth { .. }
+            | Self::Pipeline(_) => None,
         }
     }
 }
@@ -80,6 +91,9 @@ pub fn command_verb(cmd: &Command) -> &'static str {
         Command::Prefix(_) => "PREFIX",
         Command::Index(_) => "INDEX",
         Command::Health => "HEALTH",
+        Command::ConfigGet { .. } => "CONFIG",
+        Command::ConfigSet { .. } => "CONFIG",
+        Command::ConfigList => "CONFIG",
         Command::Auth { .. } => "AUTH",
         Command::Pipeline(_) => "PIPELINE",
     }

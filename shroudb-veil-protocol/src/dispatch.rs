@@ -1,13 +1,14 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use dashmap::DashMap;
 use metrics::{counter, histogram};
 use shroudb_veil_core::MatchMode;
 
 use crate::command::{Command, command_verb};
 use crate::error::CommandError;
 use crate::handlers;
-use crate::response::{CommandResponse, ResponseMap};
+use crate::response::{CommandResponse, ResponseMap, ResponseValue};
 use crate::search_engine::SearchConfig;
 use crate::transit_backend::TransitBackend;
 
@@ -15,13 +16,29 @@ use crate::transit_backend::TransitBackend;
 pub struct CommandDispatcher<T: TransitBackend> {
     transit: Arc<T>,
     search_config: SearchConfig,
+    /// In-memory config store for stateless engines (no WAL persistence).
+    config: DashMap<String, String>,
 }
 
 impl<T: TransitBackend + 'static> CommandDispatcher<T> {
     pub fn new(transit: Arc<T>, search_config: SearchConfig) -> Self {
+        let config = DashMap::new();
+        config.insert(
+            "search.max_batch_size".into(),
+            search_config.max_batch_size.to_string(),
+        );
+        config.insert(
+            "search.default_result_limit".into(),
+            search_config.default_result_limit.to_string(),
+        );
+        config.insert(
+            "search.decrypt_batch_size".into(),
+            search_config.decrypt_batch_size.to_string(),
+        );
         Self {
             transit,
             search_config,
+            config,
         }
     }
 
@@ -109,6 +126,41 @@ impl<T: TransitBackend + 'static> CommandDispatcher<T> {
                 handlers::index::handle_index(self.transit.as_ref(), &args).await
             }
             Command::Health => handlers::health::handle_health(self.transit.as_ref()).await,
+            Command::ConfigGet { key } => match self.config.get(&key) {
+                Some(v) => Ok(ResponseMap::ok()
+                    .with("value", ResponseValue::String(v.value().clone()))
+                    .with("source", ResponseValue::String("runtime".into()))),
+                None => Err(CommandError::BadArg {
+                    message: format!("unknown config key: {key}"),
+                }),
+            },
+            Command::ConfigSet { key, value } => {
+                if !self.config.contains_key(&key) {
+                    return Err(CommandError::BadArg {
+                        message: format!("unknown config key: {key}"),
+                    });
+                }
+                self.config.insert(key.clone(), value);
+                Ok(ResponseMap::ok())
+            }
+            Command::ConfigList => {
+                let fields: Vec<_> = self
+                    .config
+                    .iter()
+                    .map(|entry| {
+                        (
+                            entry.key().clone(),
+                            ResponseValue::Map(
+                                ResponseMap::ok()
+                                    .with("value", ResponseValue::String(entry.value().clone()))
+                                    .with("source", ResponseValue::String("runtime".into()))
+                                    .with("mutable", ResponseValue::Boolean(true)),
+                            ),
+                        )
+                    })
+                    .collect();
+                Ok(ResponseMap { fields })
+            }
             Command::Auth { .. } => Ok(ResponseMap::ok()),
             Command::Pipeline(_) => unreachable!("pipeline handled above"),
         }
