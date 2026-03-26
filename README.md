@@ -38,9 +38,16 @@ Client                         Veil                          Transit
 | `EXACT <keyring> QUERY <q> CIPHERTEXTS <ct> ...` | Exact equality (case-insensitive) |
 | `PREFIX <keyring> QUERY <q> CIPHERTEXTS <ct> ...` | Word-boundary prefix match |
 | `INDEX <keyring> <b64_plaintext> [FIELD <f>]` | Encrypt + generate search tokens |
+| `CONFIG GET <key>` | Get a config value |
+| `CONFIG SET <key> <value>` | Set a config value (in-memory only) |
+| `CONFIG LIST` | List all config keys and values |
 | `HEALTH` | Server + Transit health check |
 
 Options: `[FIELD <f>]` `[CONTEXT <aad>]` `[LIMIT <n>]` `[REWRAP]`
+
+All commands use the RESP3 wire protocol (same framing as Transit).
+
+CONFIG keys include `search.max_batch_size`, `search.default_result_limit`, and `search.decrypt_batch_size`. Since Veil is stateless, CONFIG SET changes are in-memory only and do not persist across restarts.
 
 ## Search tokens
 
