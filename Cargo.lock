@@ -1726,9 +1726,9 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shroudb-core"
-version = "0.2.0"
+version = "0.1.0"
 source = "sparse+https://crates.shroudb.dev/api/v1/crates/"
-checksum = "088bf97a87e6742648c2c94d0d2386db1c54faf3b201f85add91b21a15b65797"
+checksum = "fcaeee6fb17f3cda7fe31ef534e844f001f1b7a798bf4d4749ccc41b8b8ffbb8"
 dependencies = [
  "serde",
  "serde_json",
@@ -1739,9 +1739,9 @@ dependencies = [
 
 [[package]]
 name = "shroudb-crypto"
-version = "0.2.0"
+version = "0.1.0"
 source = "sparse+https://crates.shroudb.dev/api/v1/crates/"
-checksum = "4522760be972faef902cf28432f68fe9dd0e98e606d0c34c411d6d127ac59823"
+checksum = "250f11ac5349fba63c79f83428dbd67736731c4172970863b35b319b741c9bb5"
 dependencies = [
  "argon2",
  "base62",
@@ -1764,7 +1764,7 @@ dependencies = [
 name = "shroudb-protocol-wire"
 version = "0.1.0"
 source = "sparse+https://crates.shroudb.dev/api/v1/crates/"
-checksum = "7d24688e18eaccf473d1816de950a82564a6ad1ac0607c2bafc62bafd30f4697"
+checksum = "a5785b4df3d723d8850bcb818f308b4dc5a8d7f183cb906a751d79c97c5be036"
 dependencies = [
  "thiserror",
  "tokio",
@@ -1772,9 +1772,9 @@ dependencies = [
 
 [[package]]
 name = "shroudb-storage"
-version = "0.2.0"
+version = "0.1.0"
 source = "sparse+https://crates.shroudb.dev/api/v1/crates/"
-checksum = "924dbf5302461ec45d8ca1e5ff354d425da35cc1c7a1e70515e094e02535eb12"
+checksum = "609d15073e9cf540986daecf24ba4f3ffbfcd537aafdd9d7efeb304cdb59b632"
 dependencies = [
  "crc32fast",
  "dashmap",
@@ -1795,7 +1795,7 @@ dependencies = [
 name = "shroudb-transit-client"
 version = "0.1.0"
 source = "sparse+https://crates.shroudb.dev/api/v1/crates/"
-checksum = "226974a2f878608261e0d9d935aa6ab97c6169928a5eebbfe2032b33b2928ae9"
+checksum = "de8e824440de37e8b12ac14bf7470e1a54b177746455c20744457ebec81743d0"
 dependencies = [
  "base64",
  "rustls",
@@ -1812,7 +1812,7 @@ dependencies = [
 name = "shroudb-transit-core"
 version = "0.1.0"
 source = "sparse+https://crates.shroudb.dev/api/v1/crates/"
-checksum = "ff26771a75543f3bb61eb8a0631e3ea9e872cb09fbe38d75c557b37b7b5016b0"
+checksum = "74bd7fdd6028a7882384d6fe0830d2acfd4d2cbeb8c1eb3b6cdbefb16964074c"
 dependencies = [
  "base64",
  "obfuskey",
@@ -1825,7 +1825,7 @@ dependencies = [
 name = "shroudb-transit-protocol"
 version = "0.1.0"
 source = "sparse+https://crates.shroudb.dev/api/v1/crates/"
-checksum = "2c05e931276eda4256aaa8f44a834d7e849c4e503028828c5db314ef35ed9f84"
+checksum = "9f5fe1ac7f28a71457c29831b8e9ee324dafc048489dd9c33adb836a1716e4c5"
 dependencies = [
  "base64",
  "dashmap",
@@ -2795,22 +2795,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[patch.unused]]
-name = "shroudb-core"
-version = "0.2.0"
-
-[[patch.unused]]
-name = "shroudb-crypto"
-version = "0.2.0"
-
-[[patch.unused]]
-name = "shroudb-protocol-wire"
-version = "0.2.0"
-
-[[patch.unused]]
-name = "shroudb-storage"
-version = "0.2.0"
-
-[[patch.unused]]
 name = "shroudb-transit-client"
 version = "0.1.0"
 
@@ -2820,4 +2804,20 @@ version = "0.1.0"
 
 [[patch.unused]]
 name = "shroudb-transit-protocol"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "shroudb-core"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "shroudb-crypto"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "shroudb-protocol-wire"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "shroudb-storage"
 version = "0.1.0"

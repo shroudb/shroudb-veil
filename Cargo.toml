@@ -28,10 +28,10 @@ shroudb-transit-protocol = { version = "0.1.0", registry = "shroudb" }
 shroudb-transit-core = { version = "0.1.0", registry = "shroudb" }
 
 # Commons crates (shroudb registry) — v0.2.0 required to match shroudb-transit-protocol v0.1.0
-shroudb-core = { version = "0.2.0", registry = "shroudb" }
-shroudb-crypto = { version = "0.2.0", registry = "shroudb" }
+shroudb-core = { version = "0.1.0", registry = "shroudb" }
+shroudb-crypto = { version = "0.1.0", registry = "shroudb" }
 shroudb-protocol-wire = { version = "0.1.0", registry = "shroudb" }
-shroudb-storage = { version = "0.2.0", registry = "shroudb" }
+shroudb-storage = { version = "0.1.0", registry = "shroudb" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
