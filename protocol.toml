@@ -1,0 +1,316 @@
+# ShrouDB Veil Protocol Specification
+#
+# Machine-readable definition of the ShrouDB Veil protocol.
+# Used by shroudb-codegen to generate typed client libraries in any language.
+
+[protocol]
+name = "shroudb-veil"
+version = "0.1.0"
+description = "Encrypted search engine"
+default_port = 6599
+uri_schemes = ["shroudb-veil://", "shroudb-veil+tls://"]
+uri_format = "{scheme}[token@]host[:port]"
+
+[protocol.wire_format]
+type = "resp3"
+request_format = "array_of_bulk_strings"
+success_envelope = "map"
+error_envelope = "simple_error"
+success_status_field = "status"
+success_status_value = "OK"
+
+# ─── Error codes ──────────────────────────────────────────────────────────────
+
+[error_codes]
+
+[error_codes.DENIED]
+description = "Authentication required or insufficient permissions"
+http_equiv = 401
+
+[error_codes.BADARG]
+description = "Missing or invalid argument"
+http_equiv = 400
+
+[error_codes.NOTREADY]
+description = "Server or Transit backend not ready"
+http_equiv = 503
+
+[error_codes.VEIL]
+description = "Search engine domain error"
+http_equiv = 422
+
+[error_codes.TRANSIT]
+description = "Transit backend error"
+http_equiv = 502
+
+[error_codes.INTERNAL]
+description = "Unexpected server error"
+http_equiv = 500
+
+# ─── Shared types ─────────────────────────────────────────────────────────────
+
+[types]
+
+[types.keyring]
+description = "Transit keyring name for encryption/decryption"
+wire_type = "bulk_string"
+rust_type = "String"
+python_type = "str"
+typescript_type = "string"
+
+[types.query]
+description = "Search query string"
+wire_type = "bulk_string"
+rust_type = "String"
+python_type = "str"
+typescript_type = "string"
+
+[types.ciphertext]
+description = "Base64-encoded ciphertext with embedded key version"
+wire_type = "bulk_string"
+rust_type = "String"
+python_type = "str"
+typescript_type = "string"
+
+[types.plaintext]
+description = "Base64-encoded plaintext"
+wire_type = "bulk_string"
+rust_type = "String"
+python_type = "str"
+typescript_type = "string"
+
+[types.token]
+description = "Convergent-encrypted search token"
+wire_type = "bulk_string"
+rust_type = "String"
+python_type = "str"
+typescript_type = "string"
+
+[types.key_version]
+description = "Numeric key version"
+wire_type = "integer"
+rust_type = "u32"
+python_type = "int"
+typescript_type = "number"
+
+[types.score]
+description = "Search relevance score (0.0–1.0)"
+wire_type = "bulk_string"
+rust_type = "f64"
+python_type = "float"
+typescript_type = "number"
+
+[types.entry_id]
+description = "Entry identifier (index as string)"
+wire_type = "bulk_string"
+rust_type = "String"
+python_type = "str"
+typescript_type = "string"
+
+[types.entries_batch]
+description = "Base64-encoded JSON array of entries with ciphertexts and optional pre-computed tokens"
+wire_type = "bulk_string"
+rust_type = "String"
+python_type = "str"
+typescript_type = "string"
+
+# ─── Commands ─────────────────────────────────────────────────────────────────
+
+[commands]
+
+# ─── Search commands ──────────────────────────────────────────────────────────
+
+[commands.fuzzy]
+verb = "FUZZY"
+description = "Fuzzy search using Levenshtein distance (max distance: 2)"
+replica_behavior = "PureRead"
+params = [
+    { name = "keyring", type = "keyring", required = true, position = 1, description = "Transit keyring name" },
+    { name = "query", type = "query", required = true, key = "QUERY", description = "Search query" },
+    { name = "field", type = "string", required = false, key = "FIELD", description = "Restrict search to a specific JSON field" },
+    { name = "context", type = "string", required = false, key = "CONTEXT", description = "Additional authenticated data (AAD) for decryption" },
+    { name = "limit", type = "key_version", required = false, key = "LIMIT", description = "Maximum results to return (default: 100)" },
+    { name = "rewrap", type = "boolean", required = false, key = "REWRAP", description = "Re-encrypt matched entries under the active key" },
+    { name = "ciphertexts", type = "array", required = false, key = "CIPHERTEXTS", description = "Space-separated ciphertexts to search" },
+    { name = "entries", type = "entries_batch", required = false, key = "ENTRIES", description = "Base64-encoded JSON entry batch with pre-computed tokens" },
+]
+response = [
+    { name = "scanned", type = "key_version", description = "Ciphertexts decrypted after token pre-filtering" },
+    { name = "matched", type = "key_version", description = "Total matches before limit" },
+    { name = "filtered", type = "key_version", description = "Ciphertexts skipped by token pre-filter" },
+    { name = "results", type = "array", description = "Matching entries sorted by descending score" },
+]
+errors = [
+    { code = "BADARG", condition = "Missing QUERY keyword or empty query" },
+    { code = "VEIL", condition = "Batch too large, field not found, or search timeout" },
+    { code = "TRANSIT", condition = "Transit decrypt failed" },
+]
+
+[commands.contains]
+verb = "CONTAINS"
+description = "Substring search (case-insensitive)"
+replica_behavior = "PureRead"
+params = [
+    { name = "keyring", type = "keyring", required = true, position = 1, description = "Transit keyring name" },
+    { name = "query", type = "query", required = true, key = "QUERY", description = "Search query" },
+    { name = "field", type = "string", required = false, key = "FIELD", description = "Restrict search to a specific JSON field" },
+    { name = "context", type = "string", required = false, key = "CONTEXT", description = "AAD for decryption" },
+    { name = "limit", type = "key_version", required = false, key = "LIMIT", description = "Maximum results to return (default: 100)" },
+    { name = "rewrap", type = "boolean", required = false, key = "REWRAP", description = "Re-encrypt matched entries under the active key" },
+    { name = "ciphertexts", type = "array", required = false, key = "CIPHERTEXTS", description = "Space-separated ciphertexts to search" },
+    { name = "entries", type = "entries_batch", required = false, key = "ENTRIES", description = "Base64-encoded JSON entry batch with pre-computed tokens" },
+]
+response = [
+    { name = "scanned", type = "key_version", description = "Ciphertexts decrypted after token pre-filtering" },
+    { name = "matched", type = "key_version", description = "Total matches before limit" },
+    { name = "filtered", type = "key_version", description = "Ciphertexts skipped by token pre-filter" },
+    { name = "results", type = "array", description = "Matching entries sorted by descending score" },
+]
+errors = [
+    { code = "BADARG", condition = "Missing QUERY keyword or empty query" },
+    { code = "VEIL", condition = "Batch too large, field not found, or search timeout" },
+    { code = "TRANSIT", condition = "Transit decrypt failed" },
+]
+
+[commands.exact]
+verb = "EXACT"
+description = "Exact equality match (case-insensitive)"
+replica_behavior = "PureRead"
+params = [
+    { name = "keyring", type = "keyring", required = true, position = 1, description = "Transit keyring name" },
+    { name = "query", type = "query", required = true, key = "QUERY", description = "Search query" },
+    { name = "field", type = "string", required = false, key = "FIELD", description = "Restrict search to a specific JSON field" },
+    { name = "context", type = "string", required = false, key = "CONTEXT", description = "AAD for decryption" },
+    { name = "limit", type = "key_version", required = false, key = "LIMIT", description = "Maximum results to return (default: 100)" },
+    { name = "rewrap", type = "boolean", required = false, key = "REWRAP", description = "Re-encrypt matched entries under the active key" },
+    { name = "ciphertexts", type = "array", required = false, key = "CIPHERTEXTS", description = "Space-separated ciphertexts to search" },
+    { name = "entries", type = "entries_batch", required = false, key = "ENTRIES", description = "Base64-encoded JSON entry batch with pre-computed tokens" },
+]
+response = [
+    { name = "scanned", type = "key_version", description = "Ciphertexts decrypted after token pre-filtering" },
+    { name = "matched", type = "key_version", description = "Total matches before limit" },
+    { name = "filtered", type = "key_version", description = "Ciphertexts skipped by token pre-filter" },
+    { name = "results", type = "array", description = "Matching entries sorted by descending score" },
+]
+errors = [
+    { code = "BADARG", condition = "Missing QUERY keyword or empty query" },
+    { code = "VEIL", condition = "Batch too large, field not found, or search timeout" },
+    { code = "TRANSIT", condition = "Transit decrypt failed" },
+]
+
+[commands.prefix]
+verb = "PREFIX"
+description = "Word-boundary prefix match (case-insensitive)"
+replica_behavior = "PureRead"
+params = [
+    { name = "keyring", type = "keyring", required = true, position = 1, description = "Transit keyring name" },
+    { name = "query", type = "query", required = true, key = "QUERY", description = "Search query" },
+    { name = "field", type = "string", required = false, key = "FIELD", description = "Restrict search to a specific JSON field" },
+    { name = "context", type = "string", required = false, key = "CONTEXT", description = "AAD for decryption" },
+    { name = "limit", type = "key_version", required = false, key = "LIMIT", description = "Maximum results to return (default: 100)" },
+    { name = "rewrap", type = "boolean", required = false, key = "REWRAP", description = "Re-encrypt matched entries under the active key" },
+    { name = "ciphertexts", type = "array", required = false, key = "CIPHERTEXTS", description = "Space-separated ciphertexts to search" },
+    { name = "entries", type = "entries_batch", required = false, key = "ENTRIES", description = "Base64-encoded JSON entry batch with pre-computed tokens" },
+]
+response = [
+    { name = "scanned", type = "key_version", description = "Ciphertexts decrypted after token pre-filtering" },
+    { name = "matched", type = "key_version", description = "Total matches before limit" },
+    { name = "filtered", type = "key_version", description = "Ciphertexts skipped by token pre-filter" },
+    { name = "results", type = "array", description = "Matching entries sorted by descending score" },
+]
+errors = [
+    { code = "BADARG", condition = "Missing QUERY keyword or empty query" },
+    { code = "VEIL", condition = "Batch too large, field not found, or search timeout" },
+    { code = "TRANSIT", condition = "Transit decrypt failed" },
+]
+
+# ─── Indexing ─────────────────────────────────────────────────────────────────
+
+[commands.index]
+verb = "INDEX"
+description = "Encrypt plaintext and generate convergent search tokens"
+replica_behavior = "WriteOnly"
+params = [
+    { name = "keyring", type = "keyring", required = true, position = 1, description = "Transit keyring name" },
+    { name = "plaintext", type = "plaintext", required = true, position = 2, description = "Base64-encoded plaintext to index" },
+    { name = "field", type = "string", required = false, key = "FIELD", description = "JSON field scope for tokenization" },
+    { name = "context", type = "string", required = false, key = "CONTEXT", description = "AAD for encryption" },
+]
+response = [
+    { name = "ciphertext", type = "ciphertext", description = "Encrypted plaintext (non-deterministic)" },
+    { name = "key_version", type = "key_version", description = "Key version used for encryption" },
+    { name = "tokens", type = "array", description = "Convergent-encrypted search tokens" },
+]
+errors = [
+    { code = "BADARG", condition = "Invalid plaintext encoding" },
+    { code = "TRANSIT", condition = "Transit encrypt failed" },
+]
+
+# ─── Administrative ───────────────────────────────────────────────────────────
+
+[commands.health]
+verb = "HEALTH"
+description = "Check server and Transit backend health"
+replica_behavior = "PureRead"
+simple_response = true
+params = []
+response = [
+    { name = "state", type = "string", description = "Server state (ready, starting, etc.)" },
+    { name = "transit", type = "string", description = "Transit backend state" },
+]
+
+[commands.auth]
+verb = "AUTH"
+description = "Authenticate the connection"
+replica_behavior = "PureRead"
+params = [
+    { name = "token", type = "string", required = true, position = 1, description = "Bearer token" },
+]
+response = [
+    { name = "status", type = "string", description = "OK on success" },
+]
+errors = [
+    { code = "DENIED", condition = "Invalid or expired token" },
+]
+
+[commands.config_get]
+verb = "CONFIG"
+variant = "GET"
+description = "Read a runtime configuration value"
+replica_behavior = "PureRead"
+params = [
+    { name = "key", type = "string", required = true, position = 1, description = "Config key (e.g. search.max_batch_size)" },
+]
+response = [
+    { name = "value", type = "string", description = "Current config value" },
+    { name = "source", type = "string", description = "Config source (runtime)" },
+]
+errors = [
+    { code = "BADARG", condition = "Unknown config key" },
+]
+
+[commands.config_set]
+verb = "CONFIG"
+variant = "SET"
+description = "Set a runtime configuration value (in-memory only)"
+replica_behavior = "WriteOnly"
+params = [
+    { name = "key", type = "string", required = true, position = 1, description = "Config key" },
+    { name = "value", type = "string", required = true, position = 2, description = "New value" },
+]
+response = [
+    { name = "status", type = "string", description = "OK on success" },
+]
+errors = [
+    { code = "BADARG", condition = "Unknown or immutable config key" },
+]
+
+[commands.config_list]
+verb = "CONFIG"
+variant = "LIST"
+description = "List all configuration keys and values"
+replica_behavior = "PureRead"
+params = []
+response = [
+    { name = "entries", type = "array", description = "Config entries with value, source, and mutable fields" },
+]

@@ -45,7 +45,7 @@ Client                         Veil                          Transit
 
 Options: `[FIELD <f>]` `[CONTEXT <aad>]` `[LIMIT <n>]` `[REWRAP]`
 
-All commands use the RESP3 wire protocol (same framing as Transit).
+All commands use the wire protocol (same framing as Transit).
 
 CONFIG keys include `search.max_batch_size`, `search.default_result_limit`, and `search.decrypt_batch_size`. Since Veil is stateless, CONFIG SET changes are in-memory only and do not persist across restarts.
 
