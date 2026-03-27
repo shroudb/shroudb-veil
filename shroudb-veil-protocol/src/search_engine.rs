@@ -62,13 +62,27 @@ pub async fn execute_search(
     let matcher = DefaultMatcher::new(request.match_mode);
     let context = request.context.as_deref();
 
+    // Fuzzy matching requires edit-distance comparison on plaintext, so
+    // convergent token pre-filtering cannot help — skip it entirely.
+    // Operators should use smaller batch sizes for FUZZY queries.
+    let is_fuzzy = matches!(request.match_mode, shroudb_veil_core::MatchMode::Fuzzy { .. });
+
     // Token pre-filtering: encrypt query tokens and filter entries.
-    let has_any_tokens = request.ciphertexts.iter().any(|e| e.tokens.is_some());
+    let has_any_tokens = !is_fuzzy && request.ciphertexts.iter().any(|e| e.tokens.is_some());
     let encrypted_query_tokens = if has_any_tokens {
         encrypt_query_tokens(transit, &request.keyring, &request.query, context).await?
     } else {
         Vec::new()
     };
+
+    if is_fuzzy && request.ciphertexts.iter().any(|e| e.tokens.is_some()) {
+        tracing::info!(
+            query = %request.query,
+            entries = request.ciphertexts.len(),
+            "FUZZY search bypasses token pre-filter — all entries will be decrypted; \
+             use smaller batch sizes for large datasets"
+        );
+    }
 
     // Partition into candidates (pass token filter) and filtered-out.
     let mut candidates: Vec<(usize, &shroudb_veil_core::CiphertextEntry)> = Vec::new();

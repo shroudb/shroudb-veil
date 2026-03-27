@@ -489,6 +489,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
 
 [[package]]
+name = "fastrand"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
+
+[[package]]
 name = "fd-lock"
 version = "4.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1843,7 +1849,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1855,7 +1861,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1865,7 +1871,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "thiserror",
@@ -1873,7 +1879,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "dashmap",
@@ -1890,6 +1896,7 @@ dependencies = [
  "shroudb-transit-core",
  "shroudb-transit-protocol",
  "shroudb-veil-core",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",
@@ -1898,7 +1905,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2030,6 +2037,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tempfile"
+version = "3.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+dependencies = [
+ "fastrand",
+ "getrandom 0.4.2",
+ "once_cell",
+ "rustix",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

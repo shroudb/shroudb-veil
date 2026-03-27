@@ -20,6 +20,8 @@ pub fn parse_command(strings: Vec<String>) -> Result<Command, CommandError> {
         "PREFIX" => parse_search_args(args).map(Command::Prefix),
         "INDEX" => parse_index_args(args).map(Command::Index),
         "HEALTH" => Ok(Command::Health),
+        "PING" => Ok(Command::Ping),
+        "COMMAND" => parse_command_sub(args),
         "CONFIG" => parse_config(args),
         "AUTH" => parse_auth(args),
         "PIPELINE" => parse_pipeline(&strings),
@@ -170,6 +172,21 @@ fn parse_index_args(args: &[String]) -> Result<IndexArgs, CommandError> {
     })
 }
 
+fn parse_command_sub(args: &[String]) -> Result<Command, CommandError> {
+    if args.is_empty() {
+        return Err(CommandError::BadArg {
+            message: "COMMAND requires a subcommand (LIST)".into(),
+        });
+    }
+    let sub = args[0].to_ascii_uppercase();
+    match sub.as_str() {
+        "LIST" => Ok(Command::CommandList),
+        other => Err(CommandError::BadArg {
+            message: format!("unknown COMMAND subcommand: {other}"),
+        }),
+    }
+}
+
 fn parse_config(args: &[String]) -> Result<Command, CommandError> {
     let sub = require_arg(args, 0, "subcommand")?;
     match sub.to_ascii_uppercase().as_str() {
@@ -208,7 +225,7 @@ fn parse_pipeline(all_strings: &[String]) -> Result<Command, CommandError> {
     }
 
     let verbs = [
-        "FUZZY", "CONTAINS", "EXACT", "PREFIX", "INDEX", "HEALTH", "CONFIG", "AUTH",
+        "FUZZY", "CONTAINS", "EXACT", "PREFIX", "INDEX", "HEALTH", "PING", "COMMAND", "CONFIG", "AUTH",
     ];
 
     let mut commands = Vec::new();

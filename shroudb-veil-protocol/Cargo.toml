@@ -44,4 +44,9 @@ base64.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+shroudb-crypto.workspace = true
+shroudb-storage.workspace = true
+shroudb-transit-protocol.workspace = true
+shroudb-transit-core.workspace = true
+tempfile = "3"
 tokio = { version = "1", features = ["full", "test-util"] }

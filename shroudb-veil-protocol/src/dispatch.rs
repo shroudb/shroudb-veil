@@ -67,7 +67,7 @@ impl<T: TransitBackend + 'static> CommandDispatcher<T> {
         counter!("veil_commands_total", "command" => verb, "keyring" => keyring_label.clone(), "result" => result_label).increment(1);
         histogram!("veil_command_duration_seconds", "command" => verb, "keyring" => keyring_label.clone()).record(duration.as_secs_f64());
 
-        if !matches!(verb, "HEALTH" | "AUTH") {
+        if !matches!(verb, "HEALTH" | "AUTH" | "PING" | "COMMAND") {
             tracing::info!(
                 target: "veil::audit",
                 op = verb,
@@ -161,6 +161,22 @@ impl<T: TransitBackend + 'static> CommandDispatcher<T> {
                     .collect();
                 Ok(ResponseMap { fields })
             }
+            Command::Ping => Ok(ResponseMap::ok().with("message", ResponseValue::String("PONG".into()))),
+
+            Command::CommandList => {
+                let commands = vec![
+                    "FUZZY", "CONTAINS", "EXACT", "PREFIX", "INDEX",
+                    "HEALTH", "CONFIG", "AUTH", "PING", "COMMAND",
+                ];
+                let values: Vec<ResponseValue> = commands
+                    .into_iter()
+                    .map(|c| ResponseValue::String(c.into()))
+                    .collect();
+                Ok(ResponseMap::ok()
+                    .with("count", ResponseValue::Integer(values.len() as i64))
+                    .with("commands", ResponseValue::Array(values)))
+            }
+
             Command::Auth { .. } => Ok(ResponseMap::ok()),
             Command::Pipeline(_) => unreachable!("pipeline handled above"),
         }
