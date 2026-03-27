@@ -22,7 +22,7 @@ jobs:
       cli_binary: "shroudb-veil-cli"
       docker_server_target: "shroudb-veil"
       docker_cli_target: "shroudb-veil-cli"
-      crates: "shroudb-veil-protocol,shroudb-veil-server,shroudb-veil-cli"
+      crates: "shroudb-veil-core,shroudb-veil-protocol,shroudb-veil-client,shroudb-veil-server,shroudb-veil-cli"
     secrets:
       REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
       GH_PAT: ${{ secrets.GH_PAT }}

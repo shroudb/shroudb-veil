@@ -14,25 +14,24 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
 license = "MIT OR Apache-2.0"
+publish = ["shroudb"]
 
 [workspace.dependencies]
 # Internal crates
-shroudb-veil-core = { path = "shroudb-veil-core" }
-shroudb-veil-protocol = { path = "shroudb-veil-protocol" }
-shroudb-veil-client = { path = "shroudb-veil-client" }
+shroudb-veil-core = { path = "shroudb-veil-core", version = "0.1.0", registry = "shroudb" }
+shroudb-veil-protocol = { path = "shroudb-veil-protocol", version = "0.1.0", registry = "shroudb" }
+shroudb-veil-client = { path = "shroudb-veil-client", version = "0.1.0", registry = "shroudb" }
 
-# Transit client (from shroudb-transit repo) — always needed for remote mode
-shroudb-transit-client = { git = "https://github.com/shroudb/shroudb-transit.git", tag = "v0.1.0" }
+# Transit crates (shroudb registry)
+shroudb-transit-client = { version = "0.1.0", registry = "shroudb" }
+shroudb-transit-protocol = { version = "0.1.0", registry = "shroudb" }
+shroudb-transit-core = { version = "0.1.0", registry = "shroudb" }
 
-# Transit embedded (from shroudb-transit repo) — optional, for embedded mode
-shroudb-transit-protocol = { git = "https://github.com/shroudb/shroudb-transit.git", tag = "v0.1.0" }
-shroudb-transit-core = { git = "https://github.com/shroudb/shroudb-transit.git", tag = "v0.1.0" }
-
-# Commons crates (from shroudb/commons) — optional, for embedded mode
-shroudb-core = { git = "https://github.com/shroudb/commons.git", tag = "v0.1.0" }
-shroudb-crypto = { git = "https://github.com/shroudb/commons.git", tag = "v0.1.0" }
-shroudb-protocol-wire = { git = "https://github.com/shroudb/commons.git", tag = "v0.4.0" }
-shroudb-storage = { git = "https://github.com/shroudb/commons.git", tag = "v0.1.0" }
+# Commons crates (shroudb registry) — v0.2.0 required to match shroudb-transit-protocol v0.1.0
+shroudb-core = { version = "0.2.0", registry = "shroudb" }
+shroudb-crypto = { version = "0.2.0", registry = "shroudb" }
+shroudb-protocol-wire = { version = "0.1.0", registry = "shroudb" }
+shroudb-storage = { version = "0.2.0", registry = "shroudb" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
