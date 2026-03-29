@@ -1,0 +1,20 @@
+[package]
+name = "shroudb-veil-cli"
+description = "CLI tool for the Veil blind index engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "shroudb-veil-cli"
+path = "src/main.rs"
+
+[dependencies]
+shroudb-veil-client.workspace = true
+
+tokio.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true

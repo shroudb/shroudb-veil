@@ -1,0 +1,138 @@
+[protocol]
+name = "veil"
+version = "1.0.0"
+default_tcp_port = 6799
+uri_scheme = "shroudb-veil"
+
+[errors]
+DENIED = { http = 401, description = "Authentication or authorization failure" }
+NOTFOUND = { http = 404, description = "Index or entry not found" }
+EXISTS = { http = 409, description = "Index already exists" }
+BADARG = { http = 400, description = "Invalid argument or syntax" }
+INTERNAL = { http = 500, description = "Internal server error" }
+
+# ── Index Management ─────────────────────────────────────────────
+
+[commands.INDEX_CREATE]
+syntax = "INDEX CREATE <name>"
+description = "Create a new blind index with a fresh HMAC key"
+acl = "admin"
+parameters = [
+    { name = "name", type = "string", required = true, description = "Index name (alphanumeric, hyphens, underscores)" },
+]
+response = { fields = ["status", "index", "created_at"] }
+errors = ["EXISTS", "BADARG"]
+
+[commands.INDEX_LIST]
+syntax = "INDEX LIST"
+description = "List all blind index names"
+acl = "none"
+response = { type = "array", items = "string" }
+
+[commands.INDEX_INFO]
+syntax = "INDEX INFO <name>"
+description = "Get information about a blind index"
+acl = "namespace:read"
+parameters = [
+    { name = "name", type = "string", required = true },
+]
+response = { fields = ["index", "created_at", "entry_count"] }
+errors = ["NOTFOUND"]
+
+# ── Token Operations ─────────────────────────────────────────────
+
+[commands.TOKENIZE]
+syntax = "TOKENIZE <index> <plaintext_b64> [FIELD <name>]"
+description = "Generate blind tokens from plaintext without storing. Returns HMAC-derived tokens for external use."
+acl = "namespace:read"
+parameters = [
+    { name = "index", type = "string", required = true, description = "Index name" },
+    { name = "plaintext_b64", type = "string", required = true, description = "Base64-encoded plaintext to tokenize" },
+    { name = "field", type = "string", required = false, description = "JSON field to extract for tokenization" },
+]
+response = { fields = ["status", "words", "trigrams", "tokens"] }
+errors = ["NOTFOUND", "BADARG"]
+
+# ── Entry Operations ─────────────────────────────────────────────
+
+[commands.PUT]
+syntax = "PUT <index> <id> <plaintext_b64> [FIELD <name>]"
+description = "Tokenize plaintext and store the blind tokens under the given entry ID"
+acl = "namespace:write"
+parameters = [
+    { name = "index", type = "string", required = true, description = "Index name" },
+    { name = "id", type = "string", required = true, description = "Entry identifier" },
+    { name = "plaintext_b64", type = "string", required = true, description = "Base64-encoded plaintext to index" },
+    { name = "field", type = "string", required = false, description = "JSON field to extract for tokenization" },
+]
+response = { fields = ["status", "id", "version"] }
+errors = ["NOTFOUND", "BADARG"]
+
+[commands.DELETE]
+syntax = "DELETE <index> <id>"
+description = "Remove an entry's blind tokens from the index"
+acl = "namespace:write"
+parameters = [
+    { name = "index", type = "string", required = true, description = "Index name" },
+    { name = "id", type = "string", required = true, description = "Entry identifier" },
+]
+response = { fields = ["status", "id"] }
+errors = ["NOTFOUND"]
+
+# ── Search ───────────────────────────────────────────────────────
+
+[commands.SEARCH]
+syntax = "SEARCH <index> <query> [MODE exact|contains|prefix|fuzzy] [FIELD <name>] [LIMIT <n>]"
+description = "Search a blind index. Tokenizes the query, generates blind tokens, and compares against stored entries."
+acl = "namespace:read"
+parameters = [
+    { name = "index", type = "string", required = true, description = "Index name" },
+    { name = "query", type = "string", required = true, description = "Search query text" },
+    { name = "mode", type = "string", required = false, default = "contains", description = "Match mode: exact, contains, prefix, fuzzy" },
+    { name = "field", type = "string", required = false, description = "JSON field to extract for tokenization" },
+    { name = "limit", type = "integer", required = false, default = 100, description = "Maximum results to return" },
+]
+response = { fields = ["status", "scanned", "matched", "results"] }
+errors = ["NOTFOUND", "BADARG"]
+
+# ── Operational ──────────────────────────────────────────────────
+
+[commands.HEALTH]
+syntax = "HEALTH"
+description = "Health check"
+acl = "none"
+response = { fields = ["status"] }
+
+[commands.PING]
+syntax = "PING"
+description = "Ping-pong"
+acl = "none"
+response = { type = "string", value = "PONG" }
+
+[commands.AUTH]
+syntax = "AUTH <token>"
+description = "Authenticate this connection"
+acl = "none"
+parameters = [
+    { name = "token", type = "string", required = true },
+]
+response = { fields = ["status"] }
+errors = ["DENIED"]
+
+[commands.COMMAND_LIST]
+syntax = "COMMAND LIST"
+description = "List all supported commands"
+acl = "none"
+response = { fields = ["count", "commands"] }
+
+# ── Types ────────────────────────────────────────────────────────
+
+[types.SearchHit]
+fields = [
+    { name = "id", type = "string", description = "Entry identifier" },
+    { name = "score", type = "float", description = "Relevance score (0.0–1.0)" },
+]
+
+[types.MatchMode]
+enum = ["exact", "contains", "prefix", "fuzzy"]
+description = "How to match query tokens against stored tokens"

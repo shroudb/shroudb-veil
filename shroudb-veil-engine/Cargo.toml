@@ -1,0 +1,29 @@
+[package]
+name = "shroudb-veil-engine"
+description = "Store-backed blind index engine for Veil"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+shroudb-veil-core.workspace = true
+shroudb-store.workspace = true
+shroudb-crypto.workspace = true
+
+ring.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+dashmap.workspace = true
+hex.workspace = true
+base64.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+tempfile = "3"
+shroudb-storage.workspace = true

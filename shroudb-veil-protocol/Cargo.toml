@@ -1,0 +1,26 @@
+[package]
+name = "shroudb-veil-protocol"
+description = "RESP3 wire protocol for the Veil blind index engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+shroudb-veil-core.workspace = true
+shroudb-veil-engine.workspace = true
+shroudb-acl.workspace = true
+shroudb-store.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+base64.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+shroudb-storage.workspace = true
+shroudb-crypto.workspace = true
+tempfile = "3"

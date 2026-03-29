@@ -1,0 +1,30 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    uses: shroudb/.github/.github/workflows/rust-release.yml@main
+    permissions:
+      contents: write
+      packages: write
+    with:
+      product: "veil"
+      server_package: "shroudb-veil-server"
+      server_binary: "shroudb-veil"
+      cli_package: "shroudb-veil-cli"
+      cli_binary: "shroudb-veil-cli"
+      docker_server_target: "shroudb-veil"
+      docker_cli_target: "shroudb-veil-cli"
+      crates: "shroudb-veil-core,shroudb-veil-engine,shroudb-veil-protocol,shroudb-veil-client,shroudb-veil-server,shroudb-veil-cli"
+    secrets:
+      REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+      GH_PAT: ${{ secrets.GH_PAT }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
