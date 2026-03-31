@@ -242,7 +242,17 @@ impl<S: Store> VeilEngine<S> {
                 if let Some(score) = search::score_entry(mode, &query_blind, &entry_blind) {
                     let id = String::from_utf8_lossy(entry_key).into_owned();
                     hits.push(SearchHit { id, score });
+
+                    // All exact matches have score 1.0, no ranking needed
+                    if mode == MatchMode::Exact && hits.len() >= limit {
+                        break;
+                    }
                 }
+            }
+
+            // Break out of pagination if we already have enough exact matches
+            if mode == MatchMode::Exact && hits.len() >= limit {
+                break;
             }
 
             if page.cursor.is_none() {
@@ -276,7 +286,7 @@ fn decode_b64(input: &str) -> Result<Vec<u8>, VeilError> {
 }
 
 fn decode_key(idx: &shroudb_veil_core::index::BlindIndex) -> Result<SecretBytes, VeilError> {
-    let bytes = hex::decode(&idx.key_material)
+    let bytes = hex::decode(idx.key_material.as_str())
         .map_err(|e| VeilError::Internal(format!("corrupt key material hex: {e}")))?;
     Ok(SecretBytes::new(bytes))
 }
@@ -285,42 +295,8 @@ fn decode_key(idx: &shroudb_veil_core::index::BlindIndex) -> Result<SecretBytes,
 mod tests {
     use super::*;
 
-    async fn create_test_store() -> Arc<shroudb_storage::EmbeddedStore> {
-        let dir = tempfile::tempdir().unwrap().keep();
-        let config = shroudb_storage::StorageEngineConfig {
-            data_dir: dir,
-            ..Default::default()
-        };
-        let engine = shroudb_storage::StorageEngine::open(config, &EphemeralKey)
-            .await
-            .unwrap();
-        Arc::new(shroudb_storage::EmbeddedStore::new(
-            Arc::new(engine),
-            "veil-test",
-        ))
-    }
-
-    struct EphemeralKey;
-    impl shroudb_storage::MasterKeySource for EphemeralKey {
-        fn source_name(&self) -> &str {
-            "ephemeral-test"
-        }
-        fn load<'a>(
-            &'a self,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<shroudb_crypto::SecretBytes, shroudb_storage::StorageError>,
-                    > + Send
-                    + 'a,
-            >,
-        > {
-            Box::pin(async { Ok(shroudb_crypto::SecretBytes::new(vec![0x42u8; 32])) })
-        }
-    }
-
     async fn setup() -> VeilEngine<shroudb_storage::EmbeddedStore> {
-        let store = create_test_store().await;
+        let store = shroudb_storage::test_util::create_test_store("veil-test").await;
         VeilEngine::new(store, VeilConfig::default()).await.unwrap()
     }
 
@@ -465,7 +441,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.hits.len(), 3);
-        assert_eq!(result.matched, 10);
+        // Exact mode early-exits after reaching the limit — not all entries are scanned
+        assert!(result.matched >= 3);
+        assert!(result.scanned <= 10);
     }
 
     #[tokio::test]

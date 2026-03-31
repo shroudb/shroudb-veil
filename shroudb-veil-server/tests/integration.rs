@@ -237,7 +237,8 @@ async fn tcp_search_with_limit() {
         .await
         .unwrap();
     assert_eq!(result.results.len(), 3);
-    assert_eq!(result.matched, 10);
+    // Exact mode early-exits after reaching the limit — not all entries are scanned
+    assert!(result.matched >= 3);
 }
 
 // ═══════════════════════════════════════════════════════════════════════

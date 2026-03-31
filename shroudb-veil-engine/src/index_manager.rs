@@ -87,7 +87,7 @@ impl<S: Store> IndexManager<S> {
 
         let index = BlindIndex {
             name: name.to_string(),
-            key_material: hex::encode(&key_material),
+            key_material: zeroize::Zeroizing::new(hex::encode(&key_material)),
             created_at: now,
         };
 
@@ -189,43 +189,9 @@ fn unix_now() -> u64 {
 mod tests {
     use super::*;
 
-    async fn create_test_store() -> Arc<shroudb_storage::EmbeddedStore> {
-        let dir = tempfile::tempdir().unwrap().keep();
-        let config = shroudb_storage::StorageEngineConfig {
-            data_dir: dir,
-            ..Default::default()
-        };
-        let engine = shroudb_storage::StorageEngine::open(config, &EphemeralKey)
-            .await
-            .unwrap();
-        Arc::new(shroudb_storage::EmbeddedStore::new(
-            Arc::new(engine),
-            "veil-test",
-        ))
-    }
-
-    struct EphemeralKey;
-    impl shroudb_storage::MasterKeySource for EphemeralKey {
-        fn source_name(&self) -> &str {
-            "ephemeral-test"
-        }
-        fn load<'a>(
-            &'a self,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<shroudb_crypto::SecretBytes, shroudb_storage::StorageError>,
-                    > + Send
-                    + 'a,
-            >,
-        > {
-            Box::pin(async { Ok(shroudb_crypto::SecretBytes::new(vec![0x42u8; 32])) })
-        }
-    }
-
     #[tokio::test]
     async fn create_and_get_index() {
-        let store = create_test_store().await;
+        let store = shroudb_storage::test_util::create_test_store("veil-test").await;
         let mgr = IndexManager::new(store);
         mgr.init().await.unwrap();
 
@@ -239,7 +205,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_duplicate_fails() {
-        let store = create_test_store().await;
+        let store = shroudb_storage::test_util::create_test_store("veil-test").await;
         let mgr = IndexManager::new(store);
         mgr.init().await.unwrap();
 
@@ -250,7 +216,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_indexes() {
-        let store = create_test_store().await;
+        let store = shroudb_storage::test_util::create_test_store("veil-test").await;
         let mgr = IndexManager::new(store);
         mgr.init().await.unwrap();
 
@@ -264,7 +230,7 @@ mod tests {
 
     #[tokio::test]
     async fn persistence_survives_reload() {
-        let store = create_test_store().await;
+        let store = shroudb_storage::test_util::create_test_store("veil-test").await;
 
         let mgr1 = IndexManager::new(store.clone());
         mgr1.init().await.unwrap();
@@ -278,7 +244,7 @@ mod tests {
 
     #[tokio::test]
     async fn seed_if_absent_creates_new() {
-        let store = create_test_store().await;
+        let store = shroudb_storage::test_util::create_test_store("veil-test").await;
         let mgr = IndexManager::new(store);
         mgr.init().await.unwrap();
 
@@ -291,7 +257,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_names_rejected() {
-        let store = create_test_store().await;
+        let store = shroudb_storage::test_util::create_test_store("veil-test").await;
         let mgr = IndexManager::new(store);
         mgr.init().await.unwrap();
 

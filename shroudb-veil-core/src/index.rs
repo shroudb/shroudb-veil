@@ -1,3 +1,5 @@
+use zeroize::Zeroizing;
+
 /// A named blind index configuration.
 ///
 /// Each blind index has an HMAC key used to derive deterministic blind tokens.
@@ -8,7 +10,7 @@ pub struct BlindIndex {
     /// Index name (alphanumeric, hyphens, underscores).
     pub name: String,
     /// HMAC key material (hex-encoded). Used for blind token derivation.
-    pub key_material: String,
+    pub key_material: Zeroizing<String>,
     /// Unix timestamp of creation.
     pub created_at: u64,
 }
