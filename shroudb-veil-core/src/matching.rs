@@ -55,4 +55,29 @@ mod tests {
         assert_eq!(MatchMode::Prefix.wire_name(), "prefix");
         assert_eq!(MatchMode::Fuzzy.wire_name(), "fuzzy");
     }
+
+    #[test]
+    fn parse_wire_name_roundtrip() {
+        for mode in [
+            MatchMode::Exact,
+            MatchMode::Contains,
+            MatchMode::Prefix,
+            MatchMode::Fuzzy,
+        ] {
+            let parsed = MatchMode::parse(mode.wire_name()).unwrap();
+            assert_eq!(parsed, mode);
+        }
+    }
+
+    #[test]
+    fn parse_error_message_includes_input() {
+        let err = MatchMode::parse("invalid").unwrap_err();
+        assert!(err.contains("invalid"));
+    }
+
+    #[test]
+    fn parse_mixed_case() {
+        assert_eq!(MatchMode::parse("ExAcT").unwrap(), MatchMode::Exact);
+        assert_eq!(MatchMode::parse("FUZZY").unwrap(), MatchMode::Fuzzy);
+    }
 }

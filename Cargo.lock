@@ -1305,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-cli"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1316,7 +1316,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-client"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -1326,7 +1326,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-core"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -1336,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-engine"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "base64",
  "dashmap",
@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-protocol"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "base64",
  "hex",
@@ -1375,7 +1375,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-server"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "anyhow",
  "base64",

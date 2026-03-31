@@ -146,4 +146,57 @@ mod tests {
         let data = b"just plain text";
         assert_eq!(extract_text(data, None), "just plain text");
     }
+
+    #[test]
+    fn tokenize_case_normalization() {
+        let ts = tokenize("Hello WORLD hElLo");
+        // All normalized to lowercase, deduplicated
+        assert_eq!(ts.words.len(), 2);
+        assert!(ts.words.contains(&"w:hello".to_string()));
+        assert!(ts.words.contains(&"w:world".to_string()));
+    }
+
+    #[test]
+    fn tokenize_numeric_words() {
+        let ts = tokenize("user123 test456");
+        assert!(ts.words.contains(&"w:user123".to_string()));
+        assert!(ts.words.contains(&"w:test456".to_string()));
+    }
+
+    #[test]
+    fn tokenize_only_punctuation() {
+        let ts = tokenize("!@#$%^&*()");
+        assert!(ts.words.is_empty());
+        assert!(ts.trigrams.is_empty());
+    }
+
+    #[test]
+    fn tokenize_trigrams_from_multiple_words() {
+        let ts = tokenize("abc xyz");
+        // "abc" produces trigram "abc"; "xyz" produces trigram "xyz"
+        assert!(ts.trigrams.contains(&"t:abc".to_string()));
+        assert!(ts.trigrams.contains(&"t:xyz".to_string()));
+        assert_eq!(ts.trigrams.len(), 2);
+    }
+
+    #[test]
+    fn tokenize_sorted_output() {
+        let ts = tokenize("zebra apple mango");
+        // Words should be sorted
+        assert_eq!(ts.words, vec!["w:apple", "w:mango", "w:zebra"]);
+    }
+
+    #[test]
+    fn extract_text_json_string_value() {
+        let data = br#""just a string""#;
+        let text = extract_text(data, None);
+        assert_eq!(text, "just a string");
+    }
+
+    #[test]
+    fn extract_text_json_number() {
+        let data = b"42";
+        let text = extract_text(data, None);
+        assert_eq!(text, "42");
+    }
 }
