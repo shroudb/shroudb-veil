@@ -1,7 +1,10 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use shroudb_chronicle_core::event::{Engine as AuditEngine, Event, EventResult};
+use shroudb_chronicle_core::ops::ChronicleOps;
 use shroudb_crypto::SecretBytes;
 use shroudb_store::Store;
 use shroudb_veil_core::error::VeilError;
@@ -55,20 +58,58 @@ pub struct IndexInfoResult {
 pub struct VeilEngine<S: Store> {
     pub(crate) indexes: IndexManager<S>,
     pub(crate) config: VeilConfig,
+    chronicle: Option<Arc<dyn ChronicleOps>>,
 }
 
 impl<S: Store> VeilEngine<S> {
     /// Create a new Veil engine.
-    pub async fn new(store: Arc<S>, config: VeilConfig) -> Result<Self, VeilError> {
+    pub async fn new(
+        store: Arc<S>,
+        config: VeilConfig,
+        chronicle: Option<Arc<dyn ChronicleOps>>,
+    ) -> Result<Self, VeilError> {
         let indexes = IndexManager::new(store);
         indexes.init().await?;
-        Ok(Self { indexes, config })
+        Ok(Self {
+            indexes,
+            config,
+            chronicle,
+        })
+    }
+
+    /// Emit an audit event to Chronicle. Warn-only on failure — Veil is
+    /// infrastructure and must not fail because auditing is unavailable.
+    async fn emit_audit_event(
+        &self,
+        operation: &str,
+        resource: &str,
+        result: EventResult,
+        actor: Option<&str>,
+        start: Instant,
+    ) {
+        let Some(chronicle) = &self.chronicle else {
+            return;
+        };
+        let mut event = Event::new(
+            AuditEngine::Veil,
+            operation.to_string(),
+            resource.to_string(),
+            result,
+            actor.unwrap_or("anonymous").to_string(),
+        );
+        event.duration_ms = start.elapsed().as_millis() as u64;
+        if let Err(e) = chronicle.record(event).await {
+            tracing::warn!(operation, resource, error = %e, "failed to emit audit event");
+        }
     }
 
     // ── Index management ──────────────────────────────────────────
 
     pub async fn index_create(&self, name: &str) -> Result<IndexInfoResult, VeilError> {
+        let start = Instant::now();
         let idx = self.indexes.create(name).await?;
+        self.emit_audit_event("INDEX_CREATE", name, EventResult::Ok, None, start)
+            .await;
         Ok(IndexInfoResult {
             name: idx.name,
             created_at: idx.created_at,
@@ -140,6 +181,7 @@ impl<S: Store> VeilEngine<S> {
         plaintext_b64: &str,
         field: Option<&str>,
     ) -> Result<u64, VeilError> {
+        let start = Instant::now();
         if id.is_empty() {
             return Err(VeilError::InvalidArgument(
                 "entry ID cannot be empty".into(),
@@ -164,12 +206,16 @@ impl<S: Store> VeilEngine<S> {
             .await
             .map_err(|e| VeilError::Store(e.to_string()))?;
 
+        let resource = format!("{index_name}/{id}");
+        self.emit_audit_event("PUT", &resource, EventResult::Ok, None, start)
+            .await;
         Ok(version)
     }
 
     // ── Delete ────────────────────────────────────────────────────
 
     pub async fn delete(&self, index_name: &str, id: &str) -> Result<(), VeilError> {
+        let start = Instant::now();
         let _ = self.indexes.get(index_name)?;
         let ns = tokens_namespace(index_name);
 
@@ -179,6 +225,9 @@ impl<S: Store> VeilEngine<S> {
             .await
             .map_err(|e| VeilError::Store(e.to_string()))?;
 
+        let resource = format!("{index_name}/{id}");
+        self.emit_audit_event("DELETE", &resource, EventResult::Ok, None, start)
+            .await;
         Ok(())
     }
 
@@ -192,6 +241,7 @@ impl<S: Store> VeilEngine<S> {
         field: Option<&str>,
         limit: Option<usize>,
     ) -> Result<SearchResult, VeilError> {
+        let start = Instant::now();
         if query.is_empty() {
             return Err(VeilError::InvalidArgument("query cannot be empty".into()));
         }
@@ -271,6 +321,8 @@ impl<S: Store> VeilEngine<S> {
         let matched = hits.len();
         hits.truncate(limit);
 
+        self.emit_audit_event("SEARCH", index_name, EventResult::Ok, None, start)
+            .await;
         Ok(SearchResult {
             hits,
             scanned,
@@ -297,7 +349,9 @@ mod tests {
 
     async fn setup() -> VeilEngine<shroudb_storage::EmbeddedStore> {
         let store = shroudb_storage::test_util::create_test_store("veil-test").await;
-        VeilEngine::new(store, VeilConfig::default()).await.unwrap()
+        VeilEngine::new(store, VeilConfig::default(), None)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]

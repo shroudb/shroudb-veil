@@ -1221,6 +1221,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "shroudb-chronicle-core"
+version = "1.2.2"
+source = "sparse+https://crates.shroudb.dev/api/v1/crates/"
+checksum = "bfc4e204e2d1184f544f423de9bc6ad1fcff8b6ae6e0e39c3b90df1cea15c4f3"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "shroudb-crypto"
 version = "0.1.1"
 source = "sparse+https://crates.shroudb.dev/api/v1/crates/"
@@ -1293,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-cli"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1304,7 +1316,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-client"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1314,7 +1326,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-core"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1324,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-engine"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "base64",
  "dashmap",
@@ -1332,6 +1344,7 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
+ "shroudb-chronicle-core",
  "shroudb-crypto",
  "shroudb-storage",
  "shroudb-store",
@@ -1344,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-protocol"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "base64",
  "hex",
@@ -1362,7 +1375,7 @@ dependencies = [
 
 [[package]]
 name = "shroudb-veil-server"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "base64",
