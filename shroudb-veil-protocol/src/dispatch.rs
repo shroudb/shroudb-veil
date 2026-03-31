@@ -267,4 +267,73 @@ mod tests {
         let resp = dispatch(&engine, cmd, None).await;
         assert!(!resp.is_ok());
     }
+
+    // ── ACL tests ─────────────────────────────────────────────────────
+
+    fn read_only_context() -> AuthContext {
+        use shroudb_acl::{Grant, Scope};
+        AuthContext::tenant(
+            "tenant-a",
+            "read-user",
+            vec![Grant {
+                namespace: "veil.users.*".into(),
+                scopes: vec![Scope::Read],
+            }],
+            None,
+        )
+    }
+
+    fn write_context() -> AuthContext {
+        use shroudb_acl::{Grant, Scope};
+        AuthContext::tenant(
+            "tenant-a",
+            "write-user",
+            vec![Grant {
+                namespace: "veil.users.*".into(),
+                scopes: vec![Scope::Read, Scope::Write],
+            }],
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_unauthorized_write_rejected() {
+        let engine = setup().await;
+        let ctx = read_only_context();
+
+        // PUT requires Write scope on veil.<index>.*
+        let cmd = parse_command(&["PUT", "users", "u1", "QWxpY2U="]).unwrap();
+        let resp = dispatch(&engine, cmd, Some(&ctx)).await;
+        assert!(!resp.is_ok(), "read-only context should not be able to PUT");
+
+        match resp {
+            VeilResponse::Error(msg) => assert!(
+                msg.contains("access denied"),
+                "error should mention access denied, got: {msg}"
+            ),
+            _ => panic!("expected error response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_unauthorized_admin_rejected() {
+        let engine = setup().await;
+        let ctx = write_context();
+
+        // INDEX CREATE requires Admin scope
+        let cmd = parse_command(&["INDEX", "CREATE", "users"]).unwrap();
+        let resp = dispatch(&engine, cmd, Some(&ctx)).await;
+        assert!(
+            !resp.is_ok(),
+            "non-admin context should not be able to create indexes"
+        );
+
+        match resp {
+            VeilResponse::Error(msg) => assert!(
+                msg.contains("access denied"),
+                "error should mention access denied, got: {msg}"
+            ),
+            _ => panic!("expected error response"),
+        }
+    }
 }
