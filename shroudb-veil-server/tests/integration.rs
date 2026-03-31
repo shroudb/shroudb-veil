@@ -398,6 +398,84 @@ async fn tcp_update_entry() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// TCP: Edge cases
+// ═══════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_empty_query_rejected() {
+    let server = TestServer::start().await.expect("server failed to start");
+    let mut client = shroudb_veil_client::VeilClient::connect(&server.tcp_addr)
+        .await
+        .expect("connect failed");
+
+    client.index_create("test").await.unwrap();
+
+    let err = client.search("test", "", Some("exact"), None, None).await;
+    assert!(err.is_err(), "empty query should be rejected");
+
+    let err = client
+        .search("test", "", Some("contains"), None, None)
+        .await;
+    assert!(
+        err.is_err(),
+        "empty query in contains mode should be rejected"
+    );
+
+    let err = client.search("test", "", Some("fuzzy"), None, None).await;
+    assert!(err.is_err(), "empty query in fuzzy mode should be rejected");
+}
+
+#[tokio::test]
+async fn test_invalid_utf8_in_search() {
+    let server = TestServer::start().await.expect("server failed to start");
+    let mut client = shroudb_veil_client::VeilClient::connect(&server.tcp_addr)
+        .await
+        .expect("connect failed");
+
+    client.index_create("test").await.unwrap();
+
+    // Non-printable control characters and unusual unicode — the engine
+    // should handle gracefully without panicking.
+    let bad_query = "\u{0000}\u{0001}\u{007F}";
+    let result = client
+        .search("test", bad_query, Some("exact"), None, None)
+        .await;
+    // Either an error or zero results is acceptable — not a panic
+    match result {
+        Err(_) => {} // rejected at protocol or engine level
+        Ok(r) => assert_eq!(r.matched, 0, "control characters should not match anything"),
+    }
+}
+
+#[tokio::test]
+async fn test_max_length_entry() {
+    let server = TestServer::start().await.expect("server failed to start");
+    let mut client = shroudb_veil_client::VeilClient::connect(&server.tcp_addr)
+        .await
+        .expect("connect failed");
+
+    client.index_create("test").await.unwrap();
+
+    // 10KB of text with word boundaries, base64-encoded
+    let words: Vec<&str> = (0..1024).map(|_| "searchable data payload").collect();
+    let long_text = words.join(" ");
+    let encoded = STANDARD.encode(long_text.as_bytes());
+
+    client
+        .put("test", "big1", &encoded, None)
+        .await
+        .expect("put 10KB entry failed");
+
+    // Should be searchable by a word that appears in the long text
+    let result = client
+        .search("test", "searchable", Some("contains"), None, None)
+        .await
+        .expect("search on 10KB entry failed");
+    assert_eq!(result.matched, 1);
+    assert_eq!(result.results[0].id, "big1");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // ACL: Token-based auth
 // ═══════════════════════════════════════════════════════════════════════
 
