@@ -4,6 +4,7 @@
 //! Mutations write-through to the Store, then update the cache.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
@@ -19,6 +20,8 @@ const INDEXES_NAMESPACE: &str = "veil.indexes";
 pub struct IndexManager<S: Store> {
     store: Arc<S>,
     cache: DashMap<String, Arc<BlindIndex>>,
+    /// Cached entry counts per index. Avoids full pagination scans for `index_info()`.
+    entry_counts: DashMap<String, AtomicU64>,
 }
 
 impl<S: Store> IndexManager<S> {
@@ -26,6 +29,7 @@ impl<S: Store> IndexManager<S> {
         Self {
             store,
             cache: DashMap::new(),
+            entry_counts: DashMap::new(),
         }
     }
 
@@ -71,6 +75,28 @@ impl<S: Store> IndexManager<S> {
             tracing::info!(count, "loaded blind indexes from store");
         }
 
+        // Initialize entry counts for each loaded index by scanning token namespaces.
+        for entry in self.cache.iter() {
+            let name = entry.key();
+            let ns = tokens_namespace(name);
+            let mut entry_count = 0u64;
+            let mut token_cursor = None;
+            loop {
+                let page = self
+                    .store
+                    .list(&ns, None, token_cursor.as_deref(), 100)
+                    .await
+                    .map_err(|e| VeilError::Store(e.to_string()))?;
+                entry_count += page.keys.len() as u64;
+                if page.cursor.is_none() {
+                    break;
+                }
+                token_cursor = page.cursor;
+            }
+            self.entry_counts
+                .insert(name.clone(), AtomicU64::new(entry_count));
+        }
+
         Ok(())
     }
 
@@ -106,6 +132,8 @@ impl<S: Store> IndexManager<S> {
         self.save(&index).await?;
         let index = Arc::new(index);
         self.cache.insert(name.to_string(), Arc::clone(&index));
+        self.entry_counts
+            .insert(name.to_string(), AtomicU64::new(0));
 
         tracing::info!(index = name, "blind index created");
 
@@ -138,6 +166,44 @@ impl<S: Store> IndexManager<S> {
         }
         self.create(name).await?;
         Ok(())
+    }
+
+    /// Get the cached entry count for an index. Returns 0 if not tracked.
+    pub fn entry_count(&self, name: &str) -> u64 {
+        self.entry_counts
+            .get(name)
+            .map(|c| c.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    /// Increment the cached entry count for an index.
+    pub fn increment_entry_count(&self, name: &str) {
+        if let Some(c) = self.entry_counts.get(name) {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Decrement the cached entry count for an index (saturating at 0).
+    pub fn decrement_entry_count(&self, name: &str) {
+        if let Some(c) = self.entry_counts.get(name) {
+            // Use a CAS loop to avoid underflow.
+            loop {
+                let current = c.load(Ordering::Relaxed);
+                if current == 0 {
+                    break;
+                }
+                if c.compare_exchange_weak(
+                    current,
+                    current - 1,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+                {
+                    break;
+                }
+            }
+        }
     }
 
     /// Persist an index to the Store.

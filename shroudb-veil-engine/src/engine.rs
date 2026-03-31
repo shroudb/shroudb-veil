@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -14,6 +16,38 @@ use shroudb_veil_core::tokenizer;
 use crate::hmac_ops::{self, BlindTokenSet};
 use crate::index_manager::{IndexManager, tokens_namespace};
 use crate::search::{self, SearchHit};
+
+/// A wrapper around `SearchHit` that implements a min-heap ordering by score.
+/// This lets us maintain a bounded heap of the top-N highest-scoring hits:
+/// the root is always the *lowest* score in the heap, so we can efficiently
+/// evict it when a better candidate arrives.
+struct MinScoreHit(SearchHit);
+
+impl PartialEq for MinScoreHit {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.score == other.0.score
+    }
+}
+
+impl Eq for MinScoreHit {}
+
+impl PartialOrd for MinScoreHit {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for MinScoreHit {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Reverse ordering: lower score = higher priority in the heap.
+        // This makes BinaryHeap behave as a min-heap by score.
+        other
+            .0
+            .score
+            .partial_cmp(&self.0.score)
+            .unwrap_or(Ordering::Equal)
+    }
+}
 
 /// Configuration for the Veil engine.
 pub struct VeilConfig {
@@ -123,22 +157,7 @@ impl<S: Store> VeilEngine<S> {
 
     pub async fn index_info(&self, name: &str) -> Result<IndexInfoResult, VeilError> {
         let idx = self.indexes.get(name)?;
-        let ns = tokens_namespace(name);
-        let mut count = 0u64;
-        let mut cursor = None;
-        loop {
-            let page = self
-                .indexes
-                .store()
-                .list(&ns, None, cursor.as_deref(), 100)
-                .await
-                .map_err(|e| VeilError::Store(e.to_string()))?;
-            count += page.keys.len() as u64;
-            if page.cursor.is_none() {
-                break;
-            }
-            cursor = page.cursor;
-        }
+        let count = self.indexes.entry_count(name);
         Ok(IndexInfoResult {
             name: idx.name.clone(),
             created_at: idx.created_at,
@@ -199,12 +218,24 @@ impl<S: Store> VeilEngine<S> {
         let value = serde_json::to_vec(&blind)
             .map_err(|e| VeilError::Internal(format!("serialization failed: {e}")))?;
 
+        // Check whether this is a new entry or an update to an existing one.
+        let is_new = self
+            .indexes
+            .store()
+            .get(&ns, id.as_bytes(), None)
+            .await
+            .is_err();
+
         let version = self
             .indexes
             .store()
             .put(&ns, id.as_bytes(), &value, None)
             .await
             .map_err(|e| VeilError::Store(e.to_string()))?;
+
+        if is_new {
+            self.indexes.increment_entry_count(index_name);
+        }
 
         let resource = format!("{index_name}/{id}");
         self.emit_audit_event("PUT", &resource, EventResult::Ok, None, start)
@@ -219,11 +250,24 @@ impl<S: Store> VeilEngine<S> {
         let _ = self.indexes.get(index_name)?;
         let ns = tokens_namespace(index_name);
 
+        // Check whether the entry exists before deleting so we can
+        // accurately decrement the cached count.
+        let existed = self
+            .indexes
+            .store()
+            .get(&ns, id.as_bytes(), None)
+            .await
+            .is_ok();
+
         self.indexes
             .store()
             .delete(&ns, id.as_bytes())
             .await
             .map_err(|e| VeilError::Store(e.to_string()))?;
+
+        if existed {
+            self.indexes.decrement_entry_count(index_name);
+        }
 
         let resource = format!("{index_name}/{id}");
         self.emit_audit_event("DELETE", &resource, EventResult::Ok, None, start)
@@ -259,14 +303,18 @@ impl<S: Store> VeilEngine<S> {
         let query_tokens = tokenizer::tokenize(&text);
         let query_blind = hmac_ops::blind_token_set(&key, &query_tokens);
 
-        // Scan all entries in the index
+        // Scan entries, keeping only the top-`limit` hits in a bounded min-heap.
+        // This avoids collecting ALL matches into memory — the heap never exceeds
+        // `limit` entries, and we skip the final sort by draining in order.
         let ns = tokens_namespace(index_name);
         let limit = limit.unwrap_or(self.config.default_result_limit);
-        let mut hits = Vec::new();
+        let mut heap: BinaryHeap<MinScoreHit> = BinaryHeap::with_capacity(limit + 1);
         let mut scanned = 0usize;
+        let mut matched = 0usize;
+        let mut perfect_count = 0usize;
         let mut cursor = None;
 
-        loop {
+        'pages: loop {
             let page = self
                 .indexes
                 .store()
@@ -290,19 +338,32 @@ impl<S: Store> VeilEngine<S> {
                 };
 
                 if let Some(score) = search::score_entry(mode, &query_blind, &entry_blind) {
+                    matched += 1;
                     let id = String::from_utf8_lossy(entry_key).into_owned();
-                    hits.push(SearchHit { id, score });
 
-                    // All exact matches have score 1.0, no ranking needed
-                    if mode == MatchMode::Exact && hits.len() >= limit {
-                        break;
+                    if score >= 1.0 {
+                        perfect_count += 1;
+                    }
+
+                    // Push into the min-heap; if we exceed `limit`, evict the
+                    // lowest-scoring entry. This keeps memory bounded to O(limit).
+                    heap.push(MinScoreHit(SearchHit { id, score }));
+                    if heap.len() > limit {
+                        heap.pop(); // remove the lowest score
+                    }
+
+                    // Early exit: Exact mode always yields score 1.0, so once
+                    // we have `limit` hits there is no better set to find.
+                    if mode == MatchMode::Exact && matched >= limit {
+                        break 'pages;
+                    }
+
+                    // For non-exact modes: if we already have `limit` perfect
+                    // (1.0) scores, no remaining entry can displace them.
+                    if mode != MatchMode::Exact && perfect_count >= limit {
+                        break 'pages;
                     }
                 }
-            }
-
-            // Break out of pagination if we already have enough exact matches
-            if mode == MatchMode::Exact && hits.len() >= limit {
-                break;
             }
 
             if page.cursor.is_none() {
@@ -311,15 +372,13 @@ impl<S: Store> VeilEngine<S> {
             cursor = page.cursor;
         }
 
-        // Sort by descending score
-        hits.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        let matched = hits.len();
-        hits.truncate(limit);
+        // Drain the min-heap into a vec sorted by descending score.
+        let len = heap.len();
+        let mut hits = Vec::with_capacity(len);
+        while let Some(MinScoreHit(hit)) = heap.pop() {
+            hits.push(hit);
+        }
+        hits.reverse();
 
         self.emit_audit_event("SEARCH", index_name, EventResult::Ok, None, start)
             .await;
