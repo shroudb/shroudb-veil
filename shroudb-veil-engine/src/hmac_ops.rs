@@ -10,12 +10,13 @@ use shroudb_veil_core::error::VeilError;
 use shroudb_veil_core::tokenizer::TokenSet;
 
 /// Generate HMAC key material (32 bytes from CSPRNG).
-pub fn generate_key_material() -> Result<Vec<u8>, VeilError> {
+/// Returns SecretBytes to ensure key material is mlock'd and zeroized on drop.
+pub fn generate_key_material() -> Result<SecretBytes, VeilError> {
     let rng = ring::rand::SystemRandom::new();
     let mut key = vec![0u8; 32];
     ring::rand::SecureRandom::fill(&rng, &mut key)
         .map_err(|_| VeilError::Internal("CSPRNG failed".into()))?;
-    Ok(key)
+    Ok(SecretBytes::new(key))
 }
 
 /// Derive blind tokens from a TokenSet using HMAC-SHA256.
@@ -96,6 +97,6 @@ mod tests {
     #[test]
     fn generate_key_material_produces_32_bytes() {
         let key = generate_key_material().unwrap();
-        assert_eq!(key.len(), 32);
+        assert_eq!(key.as_bytes().len(), 32);
     }
 }

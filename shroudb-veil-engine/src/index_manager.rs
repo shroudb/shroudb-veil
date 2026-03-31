@@ -87,7 +87,7 @@ impl<S: Store> IndexManager<S> {
 
         let index = BlindIndex {
             name: name.to_string(),
-            key_material: zeroize::Zeroizing::new(hex::encode(&key_material)),
+            key_material: zeroize::Zeroizing::new(hex::encode(key_material.as_bytes())),
             created_at: now,
         };
 
