@@ -111,7 +111,7 @@ impl<S: Store> VeilEngine<S> {
         self.emit_audit_event("INDEX_CREATE", name, EventResult::Ok, None, start)
             .await;
         Ok(IndexInfoResult {
-            name: idx.name,
+            name: idx.name.clone(),
             created_at: idx.created_at,
             entry_count: 0,
         })
@@ -140,7 +140,7 @@ impl<S: Store> VeilEngine<S> {
             cursor = page.cursor;
         }
         Ok(IndexInfoResult {
-            name: idx.name,
+            name: idx.name.clone(),
             created_at: idx.created_at,
             entry_count: count,
         })

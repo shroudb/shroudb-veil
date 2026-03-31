@@ -18,7 +18,7 @@ const INDEXES_NAMESPACE: &str = "veil.indexes";
 /// Manages blind indexes with a Store-backed persistence layer and in-memory cache.
 pub struct IndexManager<S: Store> {
     store: Arc<S>,
-    cache: DashMap<String, BlindIndex>,
+    cache: DashMap<String, Arc<BlindIndex>>,
 }
 
 impl<S: Store> IndexManager<S> {
@@ -57,7 +57,7 @@ impl<S: Store> IndexManager<S> {
                     .map_err(|e| VeilError::Store(e.to_string()))?;
                 let index: BlindIndex = serde_json::from_slice(&entry.value)
                     .map_err(|e| VeilError::Internal(format!("corrupt index data: {e}")))?;
-                self.cache.insert(index.name.clone(), index);
+                self.cache.insert(index.name.clone(), Arc::new(index));
             }
 
             if page.cursor.is_none() {
@@ -75,7 +75,7 @@ impl<S: Store> IndexManager<S> {
     }
 
     /// Create a new blind index with a fresh HMAC key.
-    pub async fn create(&self, name: &str) -> Result<BlindIndex, VeilError> {
+    pub async fn create(&self, name: &str) -> Result<Arc<BlindIndex>, VeilError> {
         validate_index_name(name)?;
 
         if self.cache.contains_key(name) {
@@ -104,7 +104,8 @@ impl<S: Store> IndexManager<S> {
         }
 
         self.save(&index).await?;
-        self.cache.insert(name.to_string(), index.clone());
+        let index = Arc::new(index);
+        self.cache.insert(name.to_string(), Arc::clone(&index));
 
         tracing::info!(index = name, "blind index created");
 
@@ -112,10 +113,10 @@ impl<S: Store> IndexManager<S> {
     }
 
     /// Get a blind index by name from cache.
-    pub fn get(&self, name: &str) -> Result<BlindIndex, VeilError> {
+    pub fn get(&self, name: &str) -> Result<Arc<BlindIndex>, VeilError> {
         self.cache
             .get(name)
-            .map(|r| r.value().clone())
+            .map(|r| Arc::clone(r.value()))
             .ok_or_else(|| VeilError::IndexNotFound(name.to_string()))
     }
 
