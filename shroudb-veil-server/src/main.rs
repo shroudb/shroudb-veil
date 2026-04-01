@@ -74,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
     // Veil engine
     let veil_config = VeilConfig {
         default_result_limit: cfg.engine.default_result_limit,
+        ..Default::default()
     };
     let engine = Arc::new(
         VeilEngine::new(store, veil_config, None, None)

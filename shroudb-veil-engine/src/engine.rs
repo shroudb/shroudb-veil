@@ -53,12 +53,16 @@ impl Ord for MinScoreHit {
 /// Configuration for the Veil engine.
 pub struct VeilConfig {
     pub default_result_limit: usize,
+    /// Maximum entries per index (0 = unlimited). Rejects PUT on new entries
+    /// once the limit is reached. Updates to existing entries are always allowed.
+    pub max_entries_per_index: u64,
 }
 
 impl Default for VeilConfig {
     fn default() -> Self {
         Self {
             default_result_limit: 100,
+            max_entries_per_index: 0, // unlimited by default
         }
     }
 }
@@ -276,6 +280,17 @@ impl<S: Store> VeilEngine<S> {
             .get(&ns, id.as_bytes(), None)
             .await
             .is_err();
+
+        // Enforce index size limit on new entries (updates always allowed).
+        if is_new && self.config.max_entries_per_index > 0 {
+            let current = self.indexes.entry_count(index_name);
+            if current >= self.config.max_entries_per_index {
+                return Err(VeilError::InvalidArgument(format!(
+                    "index '{index_name}' is at capacity ({current}/{} entries)",
+                    self.config.max_entries_per_index,
+                )));
+            }
+        }
 
         let version = self
             .indexes
@@ -907,5 +922,45 @@ mod tests {
             assert_eq!(result.matched, 1, "value-{i} should match exactly 1 entry");
             assert_eq!(result.hits[0].id, format!("entry-{i}"));
         }
+    }
+
+    #[tokio::test]
+    async fn index_size_limit_enforced() {
+        let store = shroudb_storage::test_util::create_test_store("veil-limit-test").await;
+        let config = VeilConfig {
+            max_entries_per_index: 3,
+            ..Default::default()
+        };
+        let engine = VeilEngine::new(store, config, None, None).await.unwrap();
+        engine.index_create("limited").await.unwrap();
+
+        // Insert 3 entries — all should succeed
+        for i in 0..3 {
+            engine
+                .put(
+                    "limited",
+                    &format!("e-{i}"),
+                    &STANDARD.encode(format!("val-{i}")),
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        // 4th entry should be rejected
+        let err = engine
+            .put("limited", "e-3", &STANDARD.encode("val-3"), None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("capacity"),
+            "expected capacity error, got: {err}"
+        );
+
+        // Updating an existing entry should still work (not a new entry)
+        engine
+            .put("limited", "e-0", &STANDARD.encode("updated-0"), None)
+            .await
+            .unwrap();
     }
 }
