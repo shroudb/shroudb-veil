@@ -111,8 +111,9 @@ impl<S: Store> VeilEngine<S> {
         })
     }
 
-    /// Emit an audit event to Chronicle. Warn-only on failure — Veil is
-    /// infrastructure and must not fail because auditing is unavailable.
+    /// Emit an audit event to Chronicle. If chronicle is not configured, this
+    /// is a no-op. If chronicle is configured but unreachable, returns an error
+    /// so security-critical callers can fail closed.
     async fn emit_audit_event(
         &self,
         operation: &str,
@@ -120,9 +121,9 @@ impl<S: Store> VeilEngine<S> {
         result: EventResult,
         actor: Option<&str>,
         start: Instant,
-    ) {
+    ) -> Result<(), VeilError> {
         let Some(chronicle) = &self.chronicle else {
-            return;
+            return Ok(());
         };
         let mut event = Event::new(
             AuditEngine::Veil,
@@ -132,9 +133,11 @@ impl<S: Store> VeilEngine<S> {
             actor.unwrap_or("anonymous").to_string(),
         );
         event.duration_ms = start.elapsed().as_millis() as u64;
-        if let Err(e) = chronicle.record(event).await {
-            tracing::warn!(operation, resource, error = %e, "failed to emit audit event");
-        }
+        chronicle
+            .record(event)
+            .await
+            .map_err(|e| VeilError::Internal(format!("audit failed: {e}")))?;
+        Ok(())
     }
 
     // ── Index management ──────────────────────────────────────────
@@ -143,7 +146,7 @@ impl<S: Store> VeilEngine<S> {
         let start = Instant::now();
         let idx = self.indexes.create(name).await?;
         self.emit_audit_event("INDEX_CREATE", name, EventResult::Ok, None, start)
-            .await;
+            .await?;
         Ok(IndexInfoResult {
             name: idx.name.clone(),
             created_at: idx.created_at,
@@ -239,7 +242,7 @@ impl<S: Store> VeilEngine<S> {
 
         let resource = format!("{index_name}/{id}");
         self.emit_audit_event("PUT", &resource, EventResult::Ok, None, start)
-            .await;
+            .await?;
         Ok(version)
     }
 
@@ -271,7 +274,7 @@ impl<S: Store> VeilEngine<S> {
 
         let resource = format!("{index_name}/{id}");
         self.emit_audit_event("DELETE", &resource, EventResult::Ok, None, start)
-            .await;
+            .await?;
         Ok(())
     }
 
@@ -380,7 +383,8 @@ impl<S: Store> VeilEngine<S> {
         }
         hits.reverse();
 
-        self.emit_audit_event("SEARCH", index_name, EventResult::Ok, None, start)
+        let _ = self
+            .emit_audit_event("SEARCH", index_name, EventResult::Ok, None, start)
             .await;
         Ok(SearchResult {
             hits,
