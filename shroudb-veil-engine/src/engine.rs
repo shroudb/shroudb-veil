@@ -864,4 +864,48 @@ mod tests {
             "expected policy denied error, got: {msg}"
         );
     }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_concurrent_put_to_same_index() {
+        let engine = Arc::new(setup().await);
+        engine.index_create("concurrent").await.unwrap();
+
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let eng = engine.clone();
+            handles.push(tokio::spawn(async move {
+                eng.put(
+                    "concurrent",
+                    &format!("entry-{i}"),
+                    &STANDARD.encode(format!("value-{i}").as_bytes()),
+                    None,
+                )
+                .await
+            }));
+        }
+
+        for handle in handles {
+            handle.await.unwrap().unwrap();
+        }
+
+        // Verify all entries are present.
+        let info = engine.index_info("concurrent").await.unwrap();
+        assert_eq!(info.entry_count, 10, "all 10 entries must be indexed");
+
+        // Verify each entry is individually searchable.
+        for i in 0..10 {
+            let result = engine
+                .search(
+                    "concurrent",
+                    &format!("value-{i}"),
+                    MatchMode::Exact,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.matched, 1, "value-{i} should match exactly 1 entry");
+            assert_eq!(result.hits[0].id, format!("entry-{i}"));
+        }
+    }
 }
