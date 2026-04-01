@@ -1383,6 +1383,7 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
+ "shroudb-acl",
  "shroudb-chronicle-core",
  "shroudb-crypto",
  "shroudb-storage",

@@ -13,6 +13,13 @@ pub enum VeilError {
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 
+    #[error("policy denied: {action} on {resource} (policy: {policy})")]
+    PolicyDenied {
+        action: String,
+        resource: String,
+        policy: String,
+    },
+
     #[error("store error: {0}")]
     Store(String),
 

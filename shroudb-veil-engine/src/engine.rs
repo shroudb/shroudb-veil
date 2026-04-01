@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use shroudb_acl::{PolicyEffect, PolicyEvaluator, PolicyPrincipal, PolicyRequest, PolicyResource};
 use shroudb_chronicle_core::event::{Engine as AuditEngine, Event, EventResult};
 use shroudb_chronicle_core::ops::ChronicleOps;
 use shroudb_crypto::SecretBytes;
@@ -98,6 +99,7 @@ pub struct IndexInfoResult {
 pub struct VeilEngine<S: Store> {
     pub(crate) indexes: IndexManager<S>,
     pub(crate) config: VeilConfig,
+    policy_evaluator: Option<Arc<dyn PolicyEvaluator>>,
     chronicle: Option<Arc<dyn ChronicleOps>>,
 }
 
@@ -106,6 +108,7 @@ impl<S: Store> VeilEngine<S> {
     pub async fn new(
         store: Arc<S>,
         config: VeilConfig,
+        policy_evaluator: Option<Arc<dyn PolicyEvaluator>>,
         chronicle: Option<Arc<dyn ChronicleOps>>,
     ) -> Result<Self, VeilError> {
         let indexes = IndexManager::new(store);
@@ -113,8 +116,45 @@ impl<S: Store> VeilEngine<S> {
         Ok(Self {
             indexes,
             config,
+            policy_evaluator,
             chronicle,
         })
+    }
+
+    async fn check_policy(
+        &self,
+        resource_id: &str,
+        action: &str,
+        actor: Option<&str>,
+    ) -> Result<(), VeilError> {
+        let Some(evaluator) = &self.policy_evaluator else {
+            return Ok(());
+        };
+        let request = PolicyRequest {
+            principal: PolicyPrincipal {
+                id: actor.unwrap_or("").to_string(),
+                roles: vec![],
+                claims: Default::default(),
+            },
+            resource: PolicyResource {
+                id: resource_id.to_string(),
+                resource_type: "index".to_string(),
+                attributes: Default::default(),
+            },
+            action: action.to_string(),
+        };
+        let decision = evaluator
+            .evaluate(&request)
+            .await
+            .map_err(|e| VeilError::Internal(format!("policy evaluation: {e}")))?;
+        if decision.effect == PolicyEffect::Deny {
+            return Err(VeilError::PolicyDenied {
+                action: action.to_string(),
+                resource: resource_id.to_string(),
+                policy: decision.matched_policy.unwrap_or_default(),
+            });
+        }
+        Ok(())
     }
 
     /// Emit an audit event to Chronicle. If chronicle is not configured, this
@@ -150,6 +190,7 @@ impl<S: Store> VeilEngine<S> {
 
     pub async fn index_create(&self, name: &str) -> Result<IndexInfoResult, VeilError> {
         let start = Instant::now();
+        self.check_policy(name, "index_create", None).await?;
         let idx = self.indexes.create(name).await?;
         self.emit_audit_event("INDEX_CREATE", name, EventResult::Ok, None, start)
             .await?;
@@ -210,6 +251,7 @@ impl<S: Store> VeilEngine<S> {
         field: Option<&str>,
     ) -> Result<u64, VeilError> {
         let start = Instant::now();
+        self.check_policy(index_name, "put", None).await?;
         if id.is_empty() {
             return Err(VeilError::InvalidArgument(
                 "entry ID cannot be empty".into(),
@@ -256,6 +298,7 @@ impl<S: Store> VeilEngine<S> {
 
     pub async fn delete(&self, index_name: &str, id: &str) -> Result<(), VeilError> {
         let start = Instant::now();
+        self.check_policy(index_name, "delete", None).await?;
         let _ = self.indexes.get(index_name)?;
         let ns = tokens_namespace(index_name);
 
@@ -352,6 +395,7 @@ impl<S: Store> VeilEngine<S> {
         limit: Option<usize>,
     ) -> Result<SearchResult, VeilError> {
         let start = Instant::now();
+        self.check_policy(index_name, "search", None).await?;
         if query.is_empty() {
             return Err(VeilError::InvalidArgument("query cannot be empty".into()));
         }
@@ -475,7 +519,7 @@ mod tests {
 
     async fn setup() -> VeilEngine<shroudb_storage::EmbeddedStore> {
         let store = shroudb_storage::test_util::create_test_store("veil-test").await;
-        VeilEngine::new(store, VeilConfig::default(), None)
+        VeilEngine::new(store, VeilConfig::default(), None, None)
             .await
             .unwrap()
     }
@@ -778,5 +822,46 @@ mod tests {
         // but not with "goodbye"
         assert!(result.matched >= 1);
         assert!(result.hits.iter().all(|h| h.id != "3"));
+    }
+
+    #[tokio::test]
+    async fn test_policy_denied_blocks_put() {
+        use shroudb_acl::{
+            PolicyDecision, PolicyEffect, PolicyEvaluator, PolicyRequest, error::AclError,
+        };
+        use std::pin::Pin;
+
+        struct DenyAll;
+        impl PolicyEvaluator for DenyAll {
+            fn evaluate(
+                &self,
+                _request: &PolicyRequest,
+            ) -> Pin<
+                Box<dyn std::future::Future<Output = Result<PolicyDecision, AclError>> + Send + '_>,
+            > {
+                Box::pin(async {
+                    Ok(PolicyDecision {
+                        effect: PolicyEffect::Deny,
+                        matched_policy: Some("deny-all".to_string()),
+                        token: None,
+                        cache_until: None,
+                    })
+                })
+            }
+        }
+
+        let store = shroudb_storage::test_util::create_test_store("veil-policy-test").await;
+        let engine = VeilEngine::new(store, VeilConfig::default(), Some(Arc::new(DenyAll)), None)
+            .await
+            .unwrap();
+
+        // index_create should be denied by policy
+        let err = engine.index_create("test").await;
+        assert!(err.is_err());
+        let msg = err.unwrap_err().to_string();
+        assert!(
+            msg.contains("policy denied"),
+            "expected policy denied error, got: {msg}"
+        );
     }
 }

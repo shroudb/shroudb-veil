@@ -167,7 +167,7 @@ mod tests {
 
     async fn setup() -> VeilEngine<shroudb_storage::EmbeddedStore> {
         let store = shroudb_storage::test_util::create_test_store("veil-test").await;
-        VeilEngine::new(store, VeilConfig::default(), None)
+        VeilEngine::new(store, VeilConfig::default(), None, None)
             .await
             .unwrap()
     }

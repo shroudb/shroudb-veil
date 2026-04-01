@@ -76,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
         default_result_limit: cfg.engine.default_result_limit,
     };
     let engine = Arc::new(
-        VeilEngine::new(store, veil_config, None)
+        VeilEngine::new(store, veil_config, None, None)
             .await
             .context("failed to initialize veil engine")?,
     );
