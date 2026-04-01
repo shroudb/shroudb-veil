@@ -77,6 +77,12 @@ pub struct SearchResult {
     pub matched: usize,
 }
 
+/// Result from a reconciliation operation.
+#[derive(Debug)]
+pub struct ReconcileResult {
+    pub orphans_removed: usize,
+}
+
 /// Result from an index info query.
 #[derive(Debug)]
 pub struct IndexInfoResult {
@@ -276,6 +282,63 @@ impl<S: Store> VeilEngine<S> {
         self.emit_audit_event("DELETE", &resource, EventResult::Ok, None, start)
             .await?;
         Ok(())
+    }
+
+    // ── Reconciliation ────────────────────────────────────────────
+
+    /// Remove blind index entries whose IDs are not in the provided valid set.
+    ///
+    /// Called externally (by Moat or an operator) with the authoritative list
+    /// of entity IDs from the upstream engine (e.g. Sigil). Any entry in the
+    /// index that is not in `valid_entry_ids` is considered orphaned and deleted.
+    pub async fn reconcile_orphans(
+        &self,
+        index_name: &str,
+        valid_entry_ids: &[String],
+    ) -> Result<ReconcileResult, VeilError> {
+        use std::collections::HashSet;
+
+        let start = Instant::now();
+        let _ = self.indexes.get(index_name)?;
+        let ns = tokens_namespace(index_name);
+
+        let valid_set: HashSet<&str> = valid_entry_ids.iter().map(|s| s.as_str()).collect();
+
+        let mut orphans_removed = 0usize;
+        let mut cursor = None;
+
+        loop {
+            let page = self
+                .indexes
+                .store()
+                .list(&ns, None, cursor.as_deref(), 100)
+                .await
+                .map_err(|e| VeilError::Store(e.to_string()))?;
+
+            for entry_key in &page.keys {
+                let id = String::from_utf8_lossy(entry_key);
+                if !valid_set.contains(id.as_ref()) {
+                    self.indexes
+                        .store()
+                        .delete(&ns, entry_key)
+                        .await
+                        .map_err(|e| VeilError::Store(e.to_string()))?;
+                    self.indexes.decrement_entry_count(index_name);
+                    orphans_removed += 1;
+                }
+            }
+
+            if page.cursor.is_none() {
+                break;
+            }
+            cursor = page.cursor;
+        }
+
+        let resource = format!("{index_name}/*");
+        self.emit_audit_event("RECONCILE", &resource, EventResult::Ok, None, start)
+            .await?;
+
+        Ok(ReconcileResult { orphans_removed })
     }
 
     // ── Search ────────────────────────────────────────────────────
@@ -601,6 +664,91 @@ mod tests {
         let info = engine.index_info("test").await.unwrap();
         assert_eq!(info.name, "test");
         assert_eq!(info.entry_count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_removes_orphans() {
+        let engine = setup().await;
+        engine.index_create("test").await.unwrap();
+
+        engine
+            .put("test", "a", &STANDARD.encode(b"alpha"), None)
+            .await
+            .unwrap();
+        engine
+            .put("test", "b", &STANDARD.encode(b"bravo"), None)
+            .await
+            .unwrap();
+        engine
+            .put("test", "c", &STANDARD.encode(b"charlie"), None)
+            .await
+            .unwrap();
+
+        // Only "b" is valid — "a" and "c" are orphans.
+        let result = engine
+            .reconcile_orphans("test", &["b".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(result.orphans_removed, 2);
+
+        // Verify entry count reflects removals.
+        let info = engine.index_info("test").await.unwrap();
+        assert_eq!(info.entry_count, 1);
+
+        // Verify only "b" remains searchable.
+        let search = engine
+            .search("test", "bravo", MatchMode::Exact, None, None)
+            .await
+            .unwrap();
+        assert_eq!(search.matched, 1);
+        assert_eq!(search.hits[0].id, "b");
+
+        let search = engine
+            .search("test", "alpha", MatchMode::Exact, None, None)
+            .await
+            .unwrap();
+        assert_eq!(search.matched, 0);
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_no_orphans() {
+        let engine = setup().await;
+        engine.index_create("test").await.unwrap();
+
+        engine
+            .put("test", "a", &STANDARD.encode(b"alpha"), None)
+            .await
+            .unwrap();
+        engine
+            .put("test", "b", &STANDARD.encode(b"bravo"), None)
+            .await
+            .unwrap();
+        engine
+            .put("test", "c", &STANDARD.encode(b"charlie"), None)
+            .await
+            .unwrap();
+
+        // All three are valid — nothing to remove.
+        let result = engine
+            .reconcile_orphans("test", &["a".to_string(), "b".to_string(), "c".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(result.orphans_removed, 0);
+
+        let info = engine.index_info("test").await.unwrap();
+        assert_eq!(info.entry_count, 3);
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_empty_index() {
+        let engine = setup().await;
+        engine.index_create("test").await.unwrap();
+
+        let result = engine
+            .reconcile_orphans("test", &["a".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(result.orphans_removed, 0);
     }
 
     #[tokio::test]
