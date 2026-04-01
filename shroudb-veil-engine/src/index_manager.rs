@@ -323,6 +323,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_corrupt_index_data_handled() {
+        let store = shroudb_storage::test_util::create_test_store("veil-test").await;
+
+        // Create the namespace manually and write invalid JSON bytes
+        store
+            .namespace_create("veil.indexes", shroudb_store::NamespaceConfig::default())
+            .await
+            .unwrap();
+        store
+            .put(
+                "veil.indexes",
+                b"corrupt-index",
+                b"not valid json {{{",
+                None,
+            )
+            .await
+            .unwrap();
+
+        // init() should return an error for the corrupt entry, not panic
+        let mgr = IndexManager::new(store);
+        let result = mgr.init().await;
+        assert!(
+            result.is_err(),
+            "init should return an error for corrupt data"
+        );
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("corrupt") || msg.contains("invalid") || msg.contains("expected"),
+            "error should mention corruption: {msg}"
+        );
+    }
+
+    #[tokio::test]
     async fn invalid_names_rejected() {
         let store = shroudb_storage::test_util::create_test_store("veil-test").await;
         let mgr = IndexManager::new(store);
