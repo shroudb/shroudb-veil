@@ -199,4 +199,26 @@ mod tests {
         let text = extract_text(data, None);
         assert_eq!(text, "42");
     }
+
+    #[test]
+    fn test_null_bytes_in_input() {
+        // Null bytes are non-alphanumeric, so they act as word separators
+        let ts = tokenize("hello\0world");
+        // Should not panic; words split on \0
+        assert!(ts.words.contains(&"w:hello".to_string()));
+        assert!(ts.words.contains(&"w:world".to_string()));
+        assert_eq!(ts.words.len(), 2);
+
+        // Pure null bytes produce no tokens
+        let ts_nulls = tokenize("\0\0\0");
+        assert!(ts_nulls.words.is_empty());
+        assert!(ts_nulls.trigrams.is_empty());
+
+        // Null bytes embedded in longer text
+        let ts_mixed = tokenize("abc\0\0def");
+        assert!(ts_mixed.words.contains(&"w:abc".to_string()));
+        assert!(ts_mixed.words.contains(&"w:def".to_string()));
+        assert!(ts_mixed.trigrams.contains(&"t:abc".to_string()));
+        assert!(ts_mixed.trigrams.contains(&"t:def".to_string()));
+    }
 }
