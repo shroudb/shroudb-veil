@@ -31,11 +31,8 @@ pub async fn dispatch<S: Store>(
     auth_context: Option<&AuthContext>,
 ) -> VeilResponse {
     // Check ACL requirement before dispatch
-    let requirement = cmd.acl_requirement();
-    if let Some(ctx) = auth_context
-        && let Err(e) = ctx.check(&requirement)
-    {
-        return VeilResponse::error(format!("access denied: {e}"));
+    if let Err(e) = shroudb_acl::check_dispatch_acl(auth_context, &cmd.acl_requirement()) {
+        return VeilResponse::error(e);
     }
 
     match cmd {
