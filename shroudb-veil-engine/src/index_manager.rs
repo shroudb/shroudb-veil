@@ -366,4 +366,48 @@ mod tests {
         assert!(mgr.create("has spaces").await.is_err());
         assert!(mgr.create("has.dots").await.is_err());
     }
+
+    mod fuzz {
+        use super::*;
+        use proptest::prelude::*;
+
+        // Arbitrary strings never panic validate_index_name.
+        proptest! {
+            #[test]
+            fn arbitrary_string_never_panics(s in "\\PC{0,512}") {
+                let _ = validate_index_name(&s);
+            }
+        }
+
+        // Names from the allowed alphabet always pass.
+        proptest! {
+            #[test]
+            fn valid_alphabet_names_accepted(s in "[a-zA-Z0-9_-]{1,100}") {
+                prop_assert!(validate_index_name(&s).is_ok(), "valid name rejected: {s}");
+            }
+        }
+
+        // Names > 255 chars always rejected.
+        proptest! {
+            #[test]
+            fn oversized_names_rejected(extra in 1..300usize) {
+                let name = "a".repeat(255 + extra);
+                prop_assert!(validate_index_name(&name).is_err());
+            }
+        }
+
+        // Any accepted name contains only allowed chars and is ≤255.
+        proptest! {
+            #[test]
+            fn accepted_names_are_safe(s in "\\PC{1,300}") {
+                if validate_index_name(&s).is_ok() {
+                    prop_assert!(s.len() <= 255, "accepted name too long");
+                    prop_assert!(
+                        s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+                        "accepted name has invalid chars: {s}"
+                    );
+                }
+            }
+        }
+    }
 }

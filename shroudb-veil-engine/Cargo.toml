@@ -28,3 +28,4 @@ zeroize.workspace = true
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 shroudb-storage = { workspace = true, features = ["testing"] }
+proptest = "1"
