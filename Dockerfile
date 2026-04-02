@@ -22,6 +22,7 @@ RUN --mount=type=secret,id=registry_token \
 # --- shroudb-veil: blind index engine ---
 FROM alpine:3.21 AS shroudb-veil
 RUN adduser -D -u 65532 shroudb && \
+    apk add --no-cache su-exec && \
     mkdir /data && chown shroudb:shroudb /data
 LABEL org.opencontainers.image.title="ShrouDB Veil" \
       org.opencontainers.image.description="Blind index engine for encrypted search" \
@@ -30,11 +31,13 @@ LABEL org.opencontainers.image.title="ShrouDB Veil" \
       org.opencontainers.image.source="https://github.com/shroudb/shroudb-veil" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 COPY --from=builder /out/shroudb-veil /shroudb-veil
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 VOLUME /data
 WORKDIR /data
-USER shroudb
 EXPOSE 6799
-ENTRYPOINT ["/shroudb-veil"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["/shroudb-veil"]
 
 # --- shroudb-veil-cli: CLI tool ---
 FROM alpine:3.21 AS shroudb-veil-cli
