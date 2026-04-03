@@ -83,8 +83,9 @@ async fn execute(client: &mut VeilClient, args: &[&str]) -> anyhow::Result<()> {
         }
         "PUT" if args.len() >= 4 => {
             let field = find_option(args, "FIELD");
+            let blind = has_flag(args, "BLIND");
             let version = client
-                .put(args[1], args[2], args[3], field)
+                .put(args[1], args[2], args[3], field, blind)
                 .await
                 .context("put failed")?;
             println!(
@@ -108,8 +109,9 @@ async fn execute(client: &mut VeilClient, args: &[&str]) -> anyhow::Result<()> {
             let limit = find_option(args, "LIMIT")
                 .map(|l| l.parse::<usize>())
                 .transpose()?;
+            let blind = has_flag(args, "BLIND");
             let result = client
-                .search(args[1], args[2], mode, field, limit)
+                .search(args[1], args[2], mode, field, limit, blind)
                 .await
                 .context("search failed")?;
             println!(
@@ -195,6 +197,11 @@ fn find_option<'a>(args: &[&'a str], key: &str) -> Option<&'a str> {
     args.windows(2)
         .find(|w| w[0].to_uppercase() == upper)
         .map(|w| w[1])
+}
+
+fn has_flag(args: &[&str], flag: &str) -> bool {
+    let upper = flag.to_uppercase();
+    args.iter().any(|a| a.to_uppercase() == upper)
 }
 
 #[cfg(test)]

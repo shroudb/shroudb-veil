@@ -247,12 +247,21 @@ impl<S: Store> VeilEngine<S> {
 
     // ── Put (tokenize + store) ────────────────────────────────────
 
+    /// Store an entry in a blind index.
+    ///
+    /// When `blind` is false (default): `data_b64` is base64-encoded plaintext.
+    /// The server tokenizes, blinds with the index HMAC key, and stores.
+    ///
+    /// When `blind` is true (E2EE): `data_b64` is base64-encoded JSON
+    /// `BlindTokenSet`. The client already tokenized and blinded — the server
+    /// stores directly without touching plaintext.
     pub async fn put(
         &self,
         index_name: &str,
         id: &str,
-        plaintext_b64: &str,
+        data_b64: &str,
         field: Option<&str>,
+        blind: bool,
     ) -> Result<u64, VeilError> {
         let start = Instant::now();
         self.check_policy(index_name, "put", None).await?;
@@ -262,16 +271,27 @@ impl<S: Store> VeilEngine<S> {
             ));
         }
 
-        let idx = self.indexes.get(index_name)?;
-        let plaintext = decode_b64(plaintext_b64)?;
-        let text = tokenizer::extract_text(&plaintext, field);
-        let tokens = tokenizer::tokenize(&text);
-        let key = decode_key(&idx)?;
-        let blind = hmac_ops::blind_token_set(&key, &tokens);
+        let value = if blind {
+            // E2EE mode: data_b64 is base64-encoded BlindTokenSet JSON.
+            // Validate it parses but don't need the index key.
+            let _ = self.indexes.get(index_name)?;
+            let json = decode_b64(data_b64)?;
+            let _tokens: BlindTokenSet = serde_json::from_slice(&json)
+                .map_err(|e| VeilError::InvalidArgument(format!("invalid token set JSON: {e}")))?;
+            json
+        } else {
+            // Standard mode: tokenize + blind server-side.
+            let idx = self.indexes.get(index_name)?;
+            let plaintext = decode_b64(data_b64)?;
+            let text = tokenizer::extract_text(&plaintext, field);
+            let tokens = tokenizer::tokenize(&text);
+            let key = decode_key(&idx)?;
+            let blind_tokens = hmac_ops::blind_token_set(&key, &tokens);
+            serde_json::to_vec(&blind_tokens)
+                .map_err(|e| VeilError::Internal(format!("serialization failed: {e}")))?
+        };
 
         let ns = tokens_namespace(index_name);
-        let value = serde_json::to_vec(&blind)
-            .map_err(|e| VeilError::Internal(format!("serialization failed: {e}")))?;
 
         // Check whether this is a new entry or an update to an existing one.
         let is_new = self
@@ -401,13 +421,22 @@ impl<S: Store> VeilEngine<S> {
 
     // ── Search ────────────────────────────────────────────────────
 
+    /// Search a blind index.
+    ///
+    /// When `blind` is false (default): `query` is plain text. The server
+    /// tokenizes and blinds it with the index HMAC key before scanning.
+    ///
+    /// When `blind` is true (E2EE): `query` is base64-encoded JSON
+    /// `BlindTokenSet`. The client already tokenized and blinded — the
+    /// server decodes and scans directly.
     pub async fn search(
         &self,
         index_name: &str,
         query: &str,
         mode: MatchMode,
-        field: Option<&str>,
+        _field: Option<&str>,
         limit: Option<usize>,
+        blind: bool,
     ) -> Result<SearchResult, VeilError> {
         let start = Instant::now();
         self.check_policy(index_name, "search", None).await?;
@@ -415,24 +444,49 @@ impl<S: Store> VeilEngine<S> {
             return Err(VeilError::InvalidArgument("query cannot be empty".into()));
         }
 
-        let idx = self.indexes.get(index_name)?;
-        let key = decode_key(&idx)?;
-
-        // Tokenize and blind the query
-        let text = if field.is_some() {
-            // If searching a field, the query is plain text (not JSON)
-            query.to_string()
+        let query_blind = if blind {
+            // E2EE mode: query is base64-encoded BlindTokenSet JSON.
+            let _ = self.indexes.get(index_name)?;
+            let json = decode_b64(query)?;
+            let tokens: BlindTokenSet = serde_json::from_slice(&json)
+                .map_err(|e| VeilError::InvalidArgument(format!("invalid token set JSON: {e}")))?;
+            if tokens.words.is_empty() && tokens.trigrams.is_empty() {
+                return Err(VeilError::InvalidArgument(
+                    "query tokens cannot be empty".into(),
+                ));
+            }
+            tokens
         } else {
-            query.to_string()
+            // Standard mode: tokenize + blind server-side.
+            let idx = self.indexes.get(index_name)?;
+            let key = decode_key(&idx)?;
+            let query_tokens = tokenizer::tokenize(query);
+            hmac_ops::blind_token_set(&key, &query_tokens)
         };
-        let query_tokens = tokenizer::tokenize(&text);
-        let query_blind = hmac_ops::blind_token_set(&key, &query_tokens);
 
-        // Scan entries, keeping only the top-`limit` hits in a bounded min-heap.
-        // This avoids collecting ALL matches into memory — the heap never exceeds
-        // `limit` entries, and we skip the final sort by draining in order.
-        let ns = tokens_namespace(index_name);
         let limit = limit.unwrap_or(self.config.default_result_limit);
+        let result = self
+            .scan_entries(index_name, &query_blind, mode, limit)
+            .await?;
+
+        let _ = self
+            .emit_audit_event("SEARCH", index_name, EventResult::Ok, None, start)
+            .await;
+        Ok(result)
+    }
+
+    // ── Internal helpers ─────────────────────────────────────────
+
+    /// Scan all entries in an index, scoring each against query tokens.
+    /// Keeps only the top-`limit` hits in a bounded min-heap.
+    async fn scan_entries(
+        &self,
+        index_name: &str,
+        query_blind: &BlindTokenSet,
+        mode: MatchMode,
+        limit: usize,
+    ) -> Result<SearchResult, VeilError> {
+        let ns = tokens_namespace(index_name);
         let mut heap: BinaryHeap<MinScoreHit> = BinaryHeap::with_capacity(limit + 1);
         let mut scanned = 0usize;
         let mut matched = 0usize;
@@ -462,7 +516,7 @@ impl<S: Store> VeilEngine<S> {
                     Err(_) => continue,
                 };
 
-                if let Some(score) = search::score_entry(mode, &query_blind, &entry_blind) {
+                if let Some(score) = search::score_entry(mode, query_blind, &entry_blind) {
                     matched += 1;
                     let id = String::from_utf8_lossy(entry_key).into_owned();
 
@@ -505,9 +559,6 @@ impl<S: Store> VeilEngine<S> {
         }
         hits.reverse();
 
-        let _ = self
-            .emit_audit_event("SEARCH", index_name, EventResult::Ok, None, start)
-            .await;
         Ok(SearchResult {
             hits,
             scanned,
@@ -545,20 +596,32 @@ mod tests {
         engine.index_create("users").await.unwrap();
 
         engine
-            .put("users", "1", &STANDARD.encode(b"Alice Johnson"), None)
+            .put(
+                "users",
+                "1",
+                &STANDARD.encode(b"Alice Johnson"),
+                None,
+                false,
+            )
             .await
             .unwrap();
         engine
-            .put("users", "2", &STANDARD.encode(b"Bob Smith"), None)
+            .put("users", "2", &STANDARD.encode(b"Bob Smith"), None, false)
             .await
             .unwrap();
         engine
-            .put("users", "3", &STANDARD.encode(b"Charlie Johnson"), None)
+            .put(
+                "users",
+                "3",
+                &STANDARD.encode(b"Charlie Johnson"),
+                None,
+                false,
+            )
             .await
             .unwrap();
 
         let result = engine
-            .search("users", "johnson", MatchMode::Exact, None, None)
+            .search("users", "johnson", MatchMode::Exact, None, None, false)
             .await
             .unwrap();
         assert_eq!(result.matched, 2);
@@ -576,6 +639,7 @@ mod tests {
                 "m1",
                 &STANDARD.encode(b"hello world foo bar"),
                 None,
+                false,
             )
             .await
             .unwrap();
@@ -585,12 +649,20 @@ mod tests {
                 "m2",
                 &STANDARD.encode(b"goodbye world baz"),
                 None,
+                false,
             )
             .await
             .unwrap();
 
         let result = engine
-            .search("messages", "hello world", MatchMode::Contains, None, None)
+            .search(
+                "messages",
+                "hello world",
+                MatchMode::Contains,
+                None,
+                None,
+                false,
+            )
             .await
             .unwrap();
 
@@ -612,12 +684,13 @@ mod tests {
                 "c1",
                 &STANDARD.encode(data.to_string().as_bytes()),
                 Some("name"),
+                false,
             )
             .await
             .unwrap();
 
         let result = engine
-            .search("contacts", "alice", MatchMode::Exact, None, None)
+            .search("contacts", "alice", MatchMode::Exact, None, None, false)
             .await
             .unwrap();
         assert_eq!(result.matched, 1);
@@ -629,13 +702,13 @@ mod tests {
         engine.index_create("test").await.unwrap();
 
         engine
-            .put("test", "a", &STANDARD.encode(b"hello"), None)
+            .put("test", "a", &STANDARD.encode(b"hello"), None, false)
             .await
             .unwrap();
         engine.delete("test", "a").await.unwrap();
 
         let result = engine
-            .search("test", "hello", MatchMode::Exact, None, None)
+            .search("test", "hello", MatchMode::Exact, None, None, false)
             .await
             .unwrap();
         assert_eq!(result.matched, 0);
@@ -670,13 +743,14 @@ mod tests {
                     &format!("e{i}"),
                     &STANDARD.encode(b"common word"),
                     None,
+                    false,
                 )
                 .await
                 .unwrap();
         }
 
         let result = engine
-            .search("test", "common", MatchMode::Exact, None, Some(3))
+            .search("test", "common", MatchMode::Exact, None, Some(3), false)
             .await
             .unwrap();
         assert_eq!(result.hits.len(), 3);
@@ -691,7 +765,7 @@ mod tests {
         engine.index_create("test").await.unwrap();
 
         let err = engine
-            .search("test", "", MatchMode::Exact, None, None)
+            .search("test", "", MatchMode::Exact, None, None, false)
             .await;
         assert!(err.is_err());
     }
@@ -701,7 +775,7 @@ mod tests {
         let engine = setup().await;
 
         let err = engine
-            .search("nope", "query", MatchMode::Exact, None, None)
+            .search("nope", "query", MatchMode::Exact, None, None, false)
             .await;
         assert!(err.is_err());
     }
@@ -712,11 +786,11 @@ mod tests {
         engine.index_create("test").await.unwrap();
 
         engine
-            .put("test", "a", &STANDARD.encode(b"hello"), None)
+            .put("test", "a", &STANDARD.encode(b"hello"), None, false)
             .await
             .unwrap();
         engine
-            .put("test", "b", &STANDARD.encode(b"world"), None)
+            .put("test", "b", &STANDARD.encode(b"world"), None, false)
             .await
             .unwrap();
 
@@ -731,15 +805,15 @@ mod tests {
         engine.index_create("test").await.unwrap();
 
         engine
-            .put("test", "a", &STANDARD.encode(b"alpha"), None)
+            .put("test", "a", &STANDARD.encode(b"alpha"), None, false)
             .await
             .unwrap();
         engine
-            .put("test", "b", &STANDARD.encode(b"bravo"), None)
+            .put("test", "b", &STANDARD.encode(b"bravo"), None, false)
             .await
             .unwrap();
         engine
-            .put("test", "c", &STANDARD.encode(b"charlie"), None)
+            .put("test", "c", &STANDARD.encode(b"charlie"), None, false)
             .await
             .unwrap();
 
@@ -756,14 +830,14 @@ mod tests {
 
         // Verify only "b" remains searchable.
         let search = engine
-            .search("test", "bravo", MatchMode::Exact, None, None)
+            .search("test", "bravo", MatchMode::Exact, None, None, false)
             .await
             .unwrap();
         assert_eq!(search.matched, 1);
         assert_eq!(search.hits[0].id, "b");
 
         let search = engine
-            .search("test", "alpha", MatchMode::Exact, None, None)
+            .search("test", "alpha", MatchMode::Exact, None, None, false)
             .await
             .unwrap();
         assert_eq!(search.matched, 0);
@@ -775,15 +849,15 @@ mod tests {
         engine.index_create("test").await.unwrap();
 
         engine
-            .put("test", "a", &STANDARD.encode(b"alpha"), None)
+            .put("test", "a", &STANDARD.encode(b"alpha"), None, false)
             .await
             .unwrap();
         engine
-            .put("test", "b", &STANDARD.encode(b"bravo"), None)
+            .put("test", "b", &STANDARD.encode(b"bravo"), None, false)
             .await
             .unwrap();
         engine
-            .put("test", "c", &STANDARD.encode(b"charlie"), None)
+            .put("test", "c", &STANDARD.encode(b"charlie"), None, false)
             .await
             .unwrap();
 
@@ -816,20 +890,20 @@ mod tests {
         engine.index_create("test").await.unwrap();
 
         engine
-            .put("test", "1", &STANDARD.encode(b"hello"), None)
+            .put("test", "1", &STANDARD.encode(b"hello"), None, false)
             .await
             .unwrap();
         engine
-            .put("test", "2", &STANDARD.encode(b"helicopter"), None)
+            .put("test", "2", &STANDARD.encode(b"helicopter"), None, false)
             .await
             .unwrap();
         engine
-            .put("test", "3", &STANDARD.encode(b"goodbye"), None)
+            .put("test", "3", &STANDARD.encode(b"goodbye"), None, false)
             .await
             .unwrap();
 
         let result = engine
-            .search("test", "helo", MatchMode::Fuzzy, None, None)
+            .search("test", "helo", MatchMode::Fuzzy, None, None, false)
             .await
             .unwrap();
 
@@ -894,6 +968,7 @@ mod tests {
                     &format!("entry-{i}"),
                     &STANDARD.encode(format!("value-{i}").as_bytes()),
                     None,
+                    false,
                 )
                 .await
             }));
@@ -916,6 +991,7 @@ mod tests {
                     MatchMode::Exact,
                     None,
                     None,
+                    false,
                 )
                 .await
                 .unwrap();
@@ -942,6 +1018,7 @@ mod tests {
                     &format!("e-{i}"),
                     &STANDARD.encode(format!("val-{i}")),
                     None,
+                    false,
                 )
                 .await
                 .unwrap();
@@ -949,7 +1026,7 @@ mod tests {
 
         // 4th entry should be rejected
         let err = engine
-            .put("limited", "e-3", &STANDARD.encode("val-3"), None)
+            .put("limited", "e-3", &STANDARD.encode("val-3"), None, false)
             .await
             .unwrap_err();
         assert!(
@@ -959,8 +1036,295 @@ mod tests {
 
         // Updating an existing entry should still work (not a new entry)
         engine
-            .put("limited", "e-0", &STANDARD.encode("updated-0"), None)
+            .put("limited", "e-0", &STANDARD.encode("updated-0"), None, false)
             .await
             .unwrap();
+    }
+
+    // ── Blind (E2EE) operation tests ─────────────────────────────
+
+    /// Encode a BlindTokenSet as base64 JSON (what clients send in BLIND mode).
+    fn blind_b64(key: &[u8], text: &str) -> String {
+        let secret = shroudb_crypto::SecretBytes::new(key.to_vec());
+        let tokens = shroudb_veil_core::tokenizer::tokenize(text);
+        let blind = hmac_ops::blind_token_set(&secret, &tokens);
+        let json = serde_json::to_vec(&blind).unwrap();
+        STANDARD.encode(&json)
+    }
+
+    #[tokio::test]
+    async fn blind_put_and_search_exact() {
+        let engine = setup().await;
+        engine.index_create("e2ee").await.unwrap();
+
+        let client_key = [0x42u8; 32];
+
+        engine
+            .put(
+                "e2ee",
+                "m1",
+                &blind_b64(&client_key, "hello world"),
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+        engine
+            .put(
+                "e2ee",
+                "m2",
+                &blind_b64(&client_key, "goodbye world"),
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+
+        let result = engine
+            .search(
+                "e2ee",
+                &blind_b64(&client_key, "hello"),
+                MatchMode::Exact,
+                None,
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.matched, 1);
+        assert_eq!(result.hits[0].id, "m1");
+    }
+
+    #[tokio::test]
+    async fn blind_put_and_search_contains() {
+        let engine = setup().await;
+        engine.index_create("e2ee").await.unwrap();
+
+        let client_key = [0x42u8; 32];
+
+        engine
+            .put(
+                "e2ee",
+                "m1",
+                &blind_b64(&client_key, "hello world foo"),
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+        engine
+            .put(
+                "e2ee",
+                "m2",
+                &blind_b64(&client_key, "goodbye world bar"),
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+
+        let result = engine
+            .search(
+                "e2ee",
+                &blind_b64(&client_key, "hello world"),
+                MatchMode::Contains,
+                None,
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.matched, 2);
+        assert!(result.hits[0].score > result.hits[1].score);
+    }
+
+    #[tokio::test]
+    async fn blind_search_empty_tokens_rejected() {
+        let engine = setup().await;
+        engine.index_create("e2ee").await.unwrap();
+
+        let empty_json = STANDARD.encode(br#"{"words":[],"trigrams":[]}"#);
+        let err = engine
+            .search("e2ee", &empty_json, MatchMode::Exact, None, None, true)
+            .await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn blind_put_empty_id_rejected() {
+        let engine = setup().await;
+        engine.index_create("e2ee").await.unwrap();
+
+        let client_key = [0x42u8; 32];
+        let err = engine
+            .put("e2ee", "", &blind_b64(&client_key, "test"), None, true)
+            .await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn blind_put_respects_index_limit() {
+        let store = shroudb_storage::test_util::create_test_store("veil-blind-limit").await;
+        let config = VeilConfig {
+            max_entries_per_index: 2,
+            ..Default::default()
+        };
+        let engine = VeilEngine::new(store, config, None, None).await.unwrap();
+        engine.index_create("limited").await.unwrap();
+
+        let client_key = [0x42u8; 32];
+        engine
+            .put(
+                "limited",
+                "m1",
+                &blind_b64(&client_key, "first"),
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+        engine
+            .put(
+                "limited",
+                "m2",
+                &blind_b64(&client_key, "second"),
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+
+        let err = engine
+            .put(
+                "limited",
+                "m3",
+                &blind_b64(&client_key, "third"),
+                None,
+                true,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("capacity"));
+
+        // Update existing should still work
+        engine
+            .put(
+                "limited",
+                "m1",
+                &blind_b64(&client_key, "updated"),
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn blind_put_nonexistent_index_rejected() {
+        let engine = setup().await;
+
+        let client_key = [0x42u8; 32];
+        let err = engine
+            .put("nope", "m1", &blind_b64(&client_key, "test"), None, true)
+            .await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn blind_search_nonexistent_index_rejected() {
+        let engine = setup().await;
+
+        let client_key = [0x42u8; 32];
+        let err = engine
+            .search(
+                "nope",
+                &blind_b64(&client_key, "test"),
+                MatchMode::Exact,
+                None,
+                None,
+                true,
+            )
+            .await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn blind_put_search_fuzzy() {
+        let engine = setup().await;
+        engine.index_create("e2ee").await.unwrap();
+
+        let client_key = [0x42u8; 32];
+        engine
+            .put("e2ee", "m1", &blind_b64(&client_key, "hello"), None, true)
+            .await
+            .unwrap();
+        engine
+            .put(
+                "e2ee",
+                "m2",
+                &blind_b64(&client_key, "helicopter"),
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+        engine
+            .put("e2ee", "m3", &blind_b64(&client_key, "goodbye"), None, true)
+            .await
+            .unwrap();
+
+        let result = engine
+            .search(
+                "e2ee",
+                &blind_b64(&client_key, "helo"),
+                MatchMode::Fuzzy,
+                None,
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert!(result.matched >= 1);
+        assert!(result.hits.iter().all(|h| h.id != "m3"));
+    }
+
+    #[tokio::test]
+    async fn blind_put_delete_and_search() {
+        let engine = setup().await;
+        engine.index_create("e2ee").await.unwrap();
+
+        let client_key = [0x42u8; 32];
+        engine
+            .put("e2ee", "m1", &blind_b64(&client_key, "hello"), None, true)
+            .await
+            .unwrap();
+
+        engine.delete("e2ee", "m1").await.unwrap();
+
+        let result = engine
+            .search(
+                "e2ee",
+                &blind_b64(&client_key, "hello"),
+                MatchMode::Exact,
+                None,
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.matched, 0);
+    }
+
+    #[tokio::test]
+    async fn blind_put_invalid_json_rejected() {
+        let engine = setup().await;
+        engine.index_create("e2ee").await.unwrap();
+
+        // Valid base64 but not valid BlindTokenSet JSON
+        let bad = STANDARD.encode(b"not json");
+        let err = engine.put("e2ee", "m1", &bad, None, true).await;
+        assert!(err.is_err());
     }
 }

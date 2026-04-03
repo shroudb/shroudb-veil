@@ -112,20 +112,27 @@ impl VeilClient {
 
     // ── Entry operations ──────────────────────────────────────────
 
-    /// Index an entry (tokenize + store).
+    /// Index an entry.
+    ///
+    /// In standard mode (`blind=false`): `data_b64` is base64-encoded plaintext.
+    /// In blind mode (`blind=true`): `data_b64` is base64-encoded BlindTokenSet JSON.
     pub async fn put(
         &mut self,
         index: &str,
         id: &str,
-        plaintext_b64: &str,
+        data_b64: &str,
         field: Option<&str>,
+        blind: bool,
     ) -> Result<u64, ClientError> {
-        let mut args = vec!["PUT", index, id, plaintext_b64];
+        let mut args = vec!["PUT", index, id, data_b64];
         let field_owned;
         if let Some(f) = field {
             field_owned = f.to_string();
             args.push("FIELD");
             args.push(&field_owned);
+        }
+        if blind {
+            args.push("BLIND");
         }
         let resp = self.command(&args).await?;
         check_status(&resp)?;
@@ -143,6 +150,9 @@ impl VeilClient {
     // ── Search ────────────────────────────────────────────────────
 
     /// Search a blind index.
+    ///
+    /// In standard mode (`blind=false`): `query` is plain text.
+    /// In blind mode (`blind=true`): `query` is base64-encoded BlindTokenSet JSON.
     pub async fn search(
         &mut self,
         index: &str,
@@ -150,6 +160,7 @@ impl VeilClient {
         mode: Option<&str>,
         field: Option<&str>,
         limit: Option<usize>,
+        blind: bool,
     ) -> Result<SearchResult, ClientError> {
         let mut args = vec!["SEARCH", index, query];
         let mode_owned;
@@ -169,6 +180,9 @@ impl VeilClient {
             limit_str = l.to_string();
             args.push("LIMIT");
             args.push(&limit_str);
+        }
+        if blind {
+            args.push("BLIND");
         }
         let resp = self.command(&args).await?;
         check_status(&resp)?;

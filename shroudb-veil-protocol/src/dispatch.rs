@@ -84,9 +84,13 @@ pub async fn dispatch<S: Store>(
         VeilCommand::Put {
             index,
             id,
-            plaintext,
+            data,
             field,
-        } => match engine.put(&index, &id, &plaintext, field.as_deref()).await {
+            blind,
+        } => match engine
+            .put(&index, &id, &data, field.as_deref(), blind)
+            .await
+        {
             Ok(version) => VeilResponse::ok(serde_json::json!({
                 "status": "ok",
                 "id": id,
@@ -111,13 +115,14 @@ pub async fn dispatch<S: Store>(
             mode,
             field,
             limit,
+            blind,
         } => {
             let match_mode = match MatchMode::parse(&mode) {
                 Ok(m) => m,
                 Err(e) => return VeilResponse::error(e),
             };
             match engine
-                .search(&index, &query, match_mode, field.as_deref(), limit)
+                .search(&index, &query, match_mode, field.as_deref(), limit, blind)
                 .await
             {
                 Ok(result) => {
@@ -265,6 +270,88 @@ mod tests {
         let cmd = parse_command(&["SEARCH", "nope", "query"]).unwrap();
         let resp = dispatch(&engine, cmd, None).await;
         assert!(!resp.is_ok());
+    }
+
+    // ── Blind (E2EE) dispatch tests ─────────────────────────────
+
+    fn make_blind_tokens_b64(key: &[u8], text: &str) -> String {
+        use base64::Engine as _;
+        use shroudb_veil_core::tokenizer;
+        let secret = shroudb_crypto::SecretBytes::new(key.to_vec());
+        let tokens = tokenizer::tokenize(text);
+        let blind = shroudb_veil_engine::hmac_ops::blind_token_set(&secret, &tokens);
+        let json = serde_json::to_vec(&blind).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(&json)
+    }
+
+    #[tokio::test]
+    async fn blind_put_and_search_flow() {
+        let engine = setup().await;
+
+        let cmd = parse_command(&["INDEX", "CREATE", "e2ee"]).unwrap();
+        dispatch(&engine, cmd, None).await;
+
+        let client_key = [0x42u8; 32];
+        let tokens_b64 = make_blind_tokens_b64(&client_key, "hello world");
+
+        // PUT ... BLIND
+        let cmd = parse_command(&["PUT", "e2ee", "m1", &tokens_b64, "BLIND"]).unwrap();
+        let resp = dispatch(&engine, cmd, None).await;
+        assert!(resp.is_ok(), "blind put failed: {resp:?}");
+
+        // SEARCH ... BLIND
+        let query_b64 = make_blind_tokens_b64(&client_key, "hello");
+        let cmd = parse_command(&["SEARCH", "e2ee", &query_b64, "MODE", "exact", "BLIND"]).unwrap();
+        let resp = dispatch(&engine, cmd, None).await;
+        assert!(resp.is_ok(), "blind search failed: {resp:?}");
+
+        match &resp {
+            VeilResponse::Ok(v) => {
+                assert_eq!(v["matched"], 1);
+                assert_eq!(v["results"][0]["id"], "m1");
+            }
+            _ => panic!("expected ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn blind_put_invalid_json_rejected() {
+        let engine = setup().await;
+
+        let cmd = parse_command(&["INDEX", "CREATE", "e2ee"]).unwrap();
+        dispatch(&engine, cmd, None).await;
+
+        // Valid base64 but not valid BlindTokenSet JSON
+        use base64::Engine as _;
+        let bad_json_b64 = base64::engine::general_purpose::STANDARD.encode(b"not json");
+        let cmd = parse_command(&["PUT", "e2ee", "m1", &bad_json_b64, "BLIND"]).unwrap();
+        let resp = dispatch(&engine, cmd, None).await;
+        assert!(!resp.is_ok());
+    }
+
+    #[tokio::test]
+    async fn blind_put_acl_write_required() {
+        let engine = setup().await;
+        let ctx = read_only_context();
+
+        let tokens_b64 = make_blind_tokens_b64(&[0x42u8; 32], "hello");
+        let cmd = parse_command(&["PUT", "users", "m1", &tokens_b64, "BLIND"]).unwrap();
+        let resp = dispatch(&engine, cmd, Some(&ctx)).await;
+        assert!(!resp.is_ok(), "read-only should not be able to PUT BLIND");
+    }
+
+    #[tokio::test]
+    async fn blind_search_acl_read_allowed() {
+        let engine = setup().await;
+
+        let cmd = parse_command(&["INDEX", "CREATE", "users"]).unwrap();
+        dispatch(&engine, cmd, None).await;
+
+        let ctx = read_only_context();
+        let query_b64 = make_blind_tokens_b64(&[0x42u8; 32], "hello");
+        let cmd = parse_command(&["SEARCH", "users", &query_b64, "BLIND"]).unwrap();
+        let resp = dispatch(&engine, cmd, Some(&ctx)).await;
+        assert!(resp.is_ok(), "read context should be able to SEARCH BLIND");
     }
 
     // ── ACL tests ─────────────────────────────────────────────────────

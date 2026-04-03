@@ -28,8 +28,11 @@ pub enum VeilCommand {
     Put {
         index: String,
         id: String,
-        plaintext: String,
+        data: String,
         field: Option<String>,
+        /// When true, `data` is base64-encoded BlindTokenSet JSON (E2EE mode).
+        /// When false, `data` is base64-encoded plaintext (standard mode).
+        blind: bool,
     },
     Delete {
         index: String,
@@ -43,6 +46,9 @@ pub enum VeilCommand {
         mode: String,
         field: Option<String>,
         limit: Option<usize>,
+        /// When true, `query` is base64-encoded BlindTokenSet JSON (E2EE mode).
+        /// When false, `query` is plain text (standard mode).
+        blind: bool,
     },
 
     // Operational
@@ -156,14 +162,16 @@ fn parse_tokenize(args: &[&str]) -> Result<VeilCommand, String> {
 
 fn parse_put(args: &[&str]) -> Result<VeilCommand, String> {
     if args.len() < 4 {
-        return Err("PUT <index> <id> <plaintext_b64> [FIELD <name>]".into());
+        return Err("PUT <index> <id> <data_b64> [FIELD <name>] [BLIND]".into());
     }
     let field = find_option(args, "FIELD").map(String::from);
+    let blind = has_flag(args, "BLIND");
     Ok(VeilCommand::Put {
         index: args[1].to_string(),
         id: args[2].to_string(),
-        plaintext: args[3].to_string(),
+        data: args[3].to_string(),
         field,
+        blind,
     })
 }
 
@@ -180,7 +188,7 @@ fn parse_delete(args: &[&str]) -> Result<VeilCommand, String> {
 fn parse_search(args: &[&str]) -> Result<VeilCommand, String> {
     if args.len() < 3 {
         return Err(
-            "SEARCH <index> <query> [MODE exact|contains|prefix|fuzzy] [FIELD <name>] [LIMIT <n>]"
+            "SEARCH <index> <query> [MODE exact|contains|prefix|fuzzy] [FIELD <name>] [LIMIT <n>] [BLIND]"
                 .into(),
         );
     }
@@ -190,6 +198,7 @@ fn parse_search(args: &[&str]) -> Result<VeilCommand, String> {
         .map(|v| v.parse::<usize>())
         .transpose()
         .map_err(|e| format!("invalid LIMIT: {e}"))?;
+    let blind = has_flag(args, "BLIND");
 
     Ok(VeilCommand::Search {
         index: args[1].to_string(),
@@ -197,6 +206,7 @@ fn parse_search(args: &[&str]) -> Result<VeilCommand, String> {
         mode,
         field,
         limit,
+        blind,
     })
 }
 
@@ -206,6 +216,12 @@ fn find_option<'a>(args: &[&'a str], key: &str) -> Option<&'a str> {
     args.windows(2)
         .find(|w| w[0].to_uppercase() == upper)
         .map(|w| w[1])
+}
+
+/// Check for a standalone flag keyword (no value) in the args list.
+fn has_flag(args: &[&str], flag: &str) -> bool {
+    let upper = flag.to_uppercase();
+    args.iter().any(|a| a.to_uppercase() == upper)
 }
 
 #[cfg(test)]
@@ -260,8 +276,8 @@ mod tests {
         let cmd = parse_command(&["PUT", "users", "u1", "SGVsbG8="]).unwrap();
         assert!(matches!(
             cmd,
-            VeilCommand::Put { index, id, plaintext, field: None }
-            if index == "users" && id == "u1" && plaintext == "SGVsbG8="
+            VeilCommand::Put { index, id, data, field: None, blind: false }
+            if index == "users" && id == "u1" && data == "SGVsbG8="
         ));
     }
 
@@ -270,7 +286,27 @@ mod tests {
         let cmd = parse_command(&["PUT", "users", "u1", "SGVsbG8=", "FIELD", "name"]).unwrap();
         assert!(matches!(
             cmd,
-            VeilCommand::Put { field: Some(f), .. } if f == "name"
+            VeilCommand::Put { field: Some(f), blind: false, .. } if f == "name"
+        ));
+    }
+
+    #[test]
+    fn parse_put_blind() {
+        let cmd = parse_command(&["PUT", "msgs", "m1", "dG9rZW5z", "BLIND"]).unwrap();
+        assert!(matches!(
+            cmd,
+            VeilCommand::Put { index, id, data, blind: true, .. }
+            if index == "msgs" && id == "m1" && data == "dG9rZW5z"
+        ));
+    }
+
+    #[test]
+    fn parse_put_blind_with_field() {
+        let cmd =
+            parse_command(&["PUT", "msgs", "m1", "dG9rZW5z", "FIELD", "name", "BLIND"]).unwrap();
+        assert!(matches!(
+            cmd,
+            VeilCommand::Put { blind: true, field: Some(f), .. } if f == "name"
         ));
     }
 
@@ -289,7 +325,7 @@ mod tests {
         let cmd = parse_command(&["SEARCH", "users", "alice"]).unwrap();
         assert!(matches!(
             cmd,
-            VeilCommand::Search { index, query, mode, field: None, limit: None }
+            VeilCommand::Search { index, query, mode, field: None, limit: None, blind: false }
             if index == "users" && query == "alice" && mode == "contains"
         ));
     }
@@ -306,8 +342,31 @@ mod tests {
                 mode,
                 field: Some(f),
                 limit: Some(10),
+                blind: false,
                 ..
             } if mode == "exact" && f == "name"
+        ));
+    }
+
+    #[test]
+    fn parse_search_blind() {
+        let cmd = parse_command(&["SEARCH", "msgs", "dG9rZW5z", "MODE", "exact", "BLIND"]).unwrap();
+        assert!(matches!(cmd, VeilCommand::Search { blind: true, .. }));
+    }
+
+    #[test]
+    fn parse_search_blind_with_limit() {
+        let cmd = parse_command(&[
+            "SEARCH", "msgs", "dG9rZW5z", "MODE", "exact", "LIMIT", "5", "BLIND",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cmd,
+            VeilCommand::Search {
+                blind: true,
+                limit: Some(5),
+                ..
+            }
         ));
     }
 

@@ -3,6 +3,7 @@ mod common;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use common::*;
+use shroudb_veil_blind::{BlindKey, encode_for_wire, tokenize_and_blind};
 
 // ═══════════════════════════════════════════════════════════════════════
 // TCP: Full blind index lifecycle
@@ -30,21 +31,33 @@ async fn tcp_full_blind_index_lifecycle() {
 
     // Put entries
     client
-        .put("users", "u1", &STANDARD.encode(b"Alice Johnson"), None)
+        .put(
+            "users",
+            "u1",
+            &STANDARD.encode(b"Alice Johnson"),
+            None,
+            false,
+        )
         .await
         .expect("put u1 failed");
     client
-        .put("users", "u2", &STANDARD.encode(b"Bob Smith"), None)
+        .put("users", "u2", &STANDARD.encode(b"Bob Smith"), None, false)
         .await
         .expect("put u2 failed");
     client
-        .put("users", "u3", &STANDARD.encode(b"Charlie Johnson"), None)
+        .put(
+            "users",
+            "u3",
+            &STANDARD.encode(b"Charlie Johnson"),
+            None,
+            false,
+        )
         .await
         .expect("put u3 failed");
 
     // Search: exact match on "johnson"
     let result = client
-        .search("users", "johnson", Some("exact"), None, None)
+        .search("users", "johnson", Some("exact"), None, None, false)
         .await
         .expect("search failed");
     assert_eq!(result.scanned, 3);
@@ -55,7 +68,7 @@ async fn tcp_full_blind_index_lifecycle() {
 
     // Search: contains "alice"
     let result = client
-        .search("users", "alice", Some("contains"), None, None)
+        .search("users", "alice", Some("contains"), None, None, false)
         .await
         .expect("search failed");
     assert_eq!(result.matched, 1);
@@ -81,21 +94,21 @@ async fn tcp_search_modes() {
     client.index_create("test").await.unwrap();
 
     client
-        .put("test", "1", &STANDARD.encode(b"hello world"), None)
+        .put("test", "1", &STANDARD.encode(b"hello world"), None, false)
         .await
         .unwrap();
     client
-        .put("test", "2", &STANDARD.encode(b"hello planet"), None)
+        .put("test", "2", &STANDARD.encode(b"hello planet"), None, false)
         .await
         .unwrap();
     client
-        .put("test", "3", &STANDARD.encode(b"goodbye world"), None)
+        .put("test", "3", &STANDARD.encode(b"goodbye world"), None, false)
         .await
         .unwrap();
 
     // Exact: "hello world" must have BOTH words
     let result = client
-        .search("test", "hello world", Some("exact"), None, None)
+        .search("test", "hello world", Some("exact"), None, None, false)
         .await
         .unwrap();
     assert_eq!(result.matched, 1);
@@ -103,14 +116,14 @@ async fn tcp_search_modes() {
 
     // Contains: "hello" in entries 1 and 2
     let result = client
-        .search("test", "hello", Some("contains"), None, None)
+        .search("test", "hello", Some("contains"), None, None, false)
         .await
         .unwrap();
     assert_eq!(result.matched, 2);
 
     // Contains: "world" in entries 1 and 3
     let result = client
-        .search("test", "world", Some("contains"), None, None)
+        .search("test", "world", Some("contains"), None, None, false)
         .await
         .unwrap();
     assert_eq!(result.matched, 2);
@@ -130,21 +143,21 @@ async fn tcp_fuzzy_search() {
     client.index_create("test").await.unwrap();
 
     client
-        .put("test", "1", &STANDARD.encode(b"hello"), None)
+        .put("test", "1", &STANDARD.encode(b"hello"), None, false)
         .await
         .unwrap();
     client
-        .put("test", "2", &STANDARD.encode(b"helicopter"), None)
+        .put("test", "2", &STANDARD.encode(b"helicopter"), None, false)
         .await
         .unwrap();
     client
-        .put("test", "3", &STANDARD.encode(b"xyzzy"), None)
+        .put("test", "3", &STANDARD.encode(b"xyzzy"), None, false)
         .await
         .unwrap();
 
     // Fuzzy "helo" should match "hello" and "helicopter" (shared trigrams) but not "xyzzy"
     let result = client
-        .search("test", "helo", Some("fuzzy"), None, None)
+        .search("test", "helo", Some("fuzzy"), None, None, false)
         .await
         .unwrap();
     assert!(result.matched >= 1);
@@ -166,11 +179,11 @@ async fn tcp_delete_entry() {
     client.index_create("test").await.unwrap();
 
     client
-        .put("test", "a", &STANDARD.encode(b"hello"), None)
+        .put("test", "a", &STANDARD.encode(b"hello"), None, false)
         .await
         .unwrap();
     client
-        .put("test", "b", &STANDARD.encode(b"hello"), None)
+        .put("test", "b", &STANDARD.encode(b"hello"), None, false)
         .await
         .unwrap();
 
@@ -179,7 +192,7 @@ async fn tcp_delete_entry() {
 
     // Only "b" should remain
     let result = client
-        .search("test", "hello", Some("exact"), None, None)
+        .search("test", "hello", Some("exact"), None, None, false)
         .await
         .unwrap();
     assert_eq!(result.matched, 1);
@@ -227,13 +240,14 @@ async fn tcp_search_with_limit() {
                 &format!("e{i}"),
                 &STANDARD.encode(b"common term"),
                 None,
+                false,
             )
             .await
             .unwrap();
     }
 
     let result = client
-        .search("test", "common", Some("exact"), None, Some(3))
+        .search("test", "common", Some("exact"), None, Some(3), false)
         .await
         .unwrap();
     assert_eq!(result.results.len(), 3);
@@ -261,13 +275,14 @@ async fn tcp_json_field_extraction() {
             "c1",
             &STANDARD.encode(data.to_string().as_bytes()),
             Some("name"),
+            false,
         )
         .await
         .unwrap();
 
     // Search by name field value
     let result = client
-        .search("contacts", "alice", Some("exact"), None, None)
+        .search("contacts", "alice", Some("exact"), None, None, false)
         .await
         .unwrap();
     assert_eq!(result.matched, 1);
@@ -275,7 +290,7 @@ async fn tcp_json_field_extraction() {
 
     // "portland" should NOT match since we indexed only the "name" field
     let result = client
-        .search("contacts", "portland", Some("exact"), None, None)
+        .search("contacts", "portland", Some("exact"), None, None, false)
         .await
         .unwrap();
     assert_eq!(result.matched, 0);
@@ -301,12 +316,18 @@ async fn tcp_config_seeded_indexes() {
 
     // Seeded indexes should be usable immediately
     client
-        .put("pre-seeded", "a", &STANDARD.encode(b"test data"), None)
+        .put(
+            "pre-seeded",
+            "a",
+            &STANDARD.encode(b"test data"),
+            None,
+            false,
+        )
         .await
         .expect("put on seeded index failed");
 
     let result = client
-        .search("pre-seeded", "test", Some("exact"), None, None)
+        .search("pre-seeded", "test", Some("exact"), None, None, false)
         .await
         .expect("search on seeded index failed");
     assert_eq!(result.matched, 1);
@@ -325,7 +346,7 @@ async fn tcp_error_responses() {
 
     // Nonexistent index
     let err = client
-        .search("nope", "query", Some("exact"), None, None)
+        .search("nope", "query", Some("exact"), None, None, false)
         .await;
     assert!(err.is_err(), "nonexistent index should error");
 
@@ -336,16 +357,18 @@ async fn tcp_error_responses() {
 
     // Empty query
     client.index_create("test").await.unwrap();
-    let err = client.search("test", "", Some("exact"), None, None).await;
+    let err = client
+        .search("test", "", Some("exact"), None, None, false)
+        .await;
     assert!(err.is_err(), "empty query should error");
 
     // Invalid base64
-    let err = client.put("test", "a", "!!!invalid!!!", None).await;
+    let err = client.put("test", "a", "!!!invalid!!!", None, false).await;
     assert!(err.is_err(), "invalid base64 should error");
 
     // Invalid match mode
     let err = client
-        .search("test", "query", Some("nonexistent"), None, None)
+        .search("test", "query", Some("nonexistent"), None, None, false)
         .await;
     assert!(err.is_err(), "invalid mode should error");
 }
@@ -365,33 +388,33 @@ async fn tcp_update_entry() {
 
     // Put initial data
     client
-        .put("test", "a", &STANDARD.encode(b"hello"), None)
+        .put("test", "a", &STANDARD.encode(b"hello"), None, false)
         .await
         .unwrap();
 
     // Search for "hello"
     let result = client
-        .search("test", "hello", Some("exact"), None, None)
+        .search("test", "hello", Some("exact"), None, None, false)
         .await
         .unwrap();
     assert_eq!(result.matched, 1);
 
     // Overwrite with new data
     client
-        .put("test", "a", &STANDARD.encode(b"goodbye"), None)
+        .put("test", "a", &STANDARD.encode(b"goodbye"), None, false)
         .await
         .unwrap();
 
     // "hello" should no longer match
     let result = client
-        .search("test", "hello", Some("exact"), None, None)
+        .search("test", "hello", Some("exact"), None, None, false)
         .await
         .unwrap();
     assert_eq!(result.matched, 0);
 
     // "goodbye" should match
     let result = client
-        .search("test", "goodbye", Some("exact"), None, None)
+        .search("test", "goodbye", Some("exact"), None, None, false)
         .await
         .unwrap();
     assert_eq!(result.matched, 1);
@@ -410,18 +433,22 @@ async fn test_empty_query_rejected() {
 
     client.index_create("test").await.unwrap();
 
-    let err = client.search("test", "", Some("exact"), None, None).await;
+    let err = client
+        .search("test", "", Some("exact"), None, None, false)
+        .await;
     assert!(err.is_err(), "empty query should be rejected");
 
     let err = client
-        .search("test", "", Some("contains"), None, None)
+        .search("test", "", Some("contains"), None, None, false)
         .await;
     assert!(
         err.is_err(),
         "empty query in contains mode should be rejected"
     );
 
-    let err = client.search("test", "", Some("fuzzy"), None, None).await;
+    let err = client
+        .search("test", "", Some("fuzzy"), None, None, false)
+        .await;
     assert!(err.is_err(), "empty query in fuzzy mode should be rejected");
 }
 
@@ -438,7 +465,7 @@ async fn test_invalid_utf8_in_search() {
     // should handle gracefully without panicking.
     let bad_query = "\u{0000}\u{0001}\u{007F}";
     let result = client
-        .search("test", bad_query, Some("exact"), None, None)
+        .search("test", bad_query, Some("exact"), None, None, false)
         .await;
     // Either an error or zero results is acceptable — not a panic
     match result {
@@ -462,13 +489,13 @@ async fn test_max_length_entry() {
     let encoded = STANDARD.encode(long_text.as_bytes());
 
     client
-        .put("test", "big1", &encoded, None)
+        .put("test", "big1", &encoded, None, false)
         .await
         .expect("put 10KB entry failed");
 
     // Should be searchable by a word that appears in the long text
     let result = client
-        .search("test", "searchable", Some("contains"), None, None)
+        .search("test", "searchable", Some("contains"), None, None, false)
         .await
         .expect("search on 10KB entry failed");
     assert_eq!(result.matched, 1);
@@ -538,7 +565,7 @@ async fn acl_unauthenticated_rejected_for_protected_commands() {
 
     // Put requires Write
     let err = client
-        .put("users", "u1", &STANDARD.encode(b"data"), None)
+        .put("users", "u1", &STANDARD.encode(b"data"), None, false)
         .await;
     assert!(err.is_err(), "unauthenticated put should fail");
 }
@@ -562,11 +589,11 @@ async fn acl_admin_token_full_access() {
 
     // Admin can put and search
     client
-        .put("users", "u1", &STANDARD.encode(b"Alice"), None)
+        .put("users", "u1", &STANDARD.encode(b"Alice"), None, false)
         .await
         .expect("admin should put");
     let result = client
-        .search("users", "alice", Some("exact"), None, None)
+        .search("users", "alice", Some("exact"), None, None, false)
         .await
         .expect("admin should search");
     assert_eq!(result.matched, 1);
@@ -616,11 +643,11 @@ async fn acl_scoped_token_can_operate_on_granted_index() {
 
     // App token has veil.users.* with read+write
     client
-        .put("users", "u1", &STANDARD.encode(b"Alice"), None)
+        .put("users", "u1", &STANDARD.encode(b"Alice"), None, false)
         .await
         .expect("scoped token should put on granted index");
     client
-        .search("users", "alice", Some("exact"), None, None)
+        .search("users", "alice", Some("exact"), None, None, false)
         .await
         .expect("scoped token should search on granted index");
 }
@@ -640,7 +667,7 @@ async fn acl_readonly_token_cannot_put() {
         .unwrap();
     admin.auth("admin-token").await.unwrap();
     admin
-        .put("users", "u1", &STANDARD.encode(b"Alice"), None)
+        .put("users", "u1", &STANDARD.encode(b"Alice"), None, false)
         .await
         .unwrap();
 
@@ -655,17 +682,341 @@ async fn acl_readonly_token_cannot_put() {
 
     // Read-only can search (Read scope)
     client
-        .search("users", "alice", Some("exact"), None, None)
+        .search("users", "alice", Some("exact"), None, None, false)
         .await
         .expect("readonly should search");
 
     // Read-only CANNOT put (Write scope required)
     let err = client
-        .put("users", "u2", &STANDARD.encode(b"Bob"), None)
+        .put("users", "u2", &STANDARD.encode(b"Bob"), None, false)
         .await;
     assert!(err.is_err(), "readonly should not put");
 
     // Read-only CANNOT delete (Write scope required)
     let err = client.delete("users", "u1").await;
     assert!(err.is_err(), "readonly should not delete");
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// TCP: Blind (E2EE) operations
+// ═══════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn tcp_blind_put_and_search() {
+    let server = TestServer::start().await.expect("server failed to start");
+    let mut client = shroudb_veil_client::VeilClient::connect(&server.tcp_addr)
+        .await
+        .expect("connect failed");
+
+    client.index_create("e2ee").await.unwrap();
+
+    // Client-side key — never sent to the server.
+    let key = BlindKey::from_bytes(vec![0x42u8; 32]).unwrap();
+
+    // BLIND_PUT: tokenize + blind locally, send pre-computed tokens
+    let tokens1 = tokenize_and_blind(&key, "hello world");
+    let tokens1_b64 = encode_for_wire(&tokens1).unwrap();
+    client
+        .put("e2ee", "m1", &tokens1_b64, None, true)
+        .await
+        .expect("blind_put m1 failed");
+
+    let tokens2 = tokenize_and_blind(&key, "goodbye world");
+    let tokens2_b64 = encode_for_wire(&tokens2).unwrap();
+    client
+        .put("e2ee", "m2", &tokens2_b64, None, true)
+        .await
+        .expect("blind_put m2 failed");
+
+    // BLIND_SEARCH: exact match on "hello"
+    let query = tokenize_and_blind(&key, "hello");
+    let query_b64 = encode_for_wire(&query).unwrap();
+    let result = client
+        .search("e2ee", &query_b64, Some("exact"), None, None, true)
+        .await
+        .expect("blind_search failed");
+    assert_eq!(result.matched, 1);
+    assert_eq!(result.results[0].id, "m1");
+
+    // BLIND_SEARCH: contains "world" should match both
+    let query = tokenize_and_blind(&key, "world");
+    let query_b64 = encode_for_wire(&query).unwrap();
+    let result = client
+        .search("e2ee", &query_b64, Some("contains"), None, None, true)
+        .await
+        .expect("blind_search failed");
+    assert_eq!(result.matched, 2);
+}
+
+#[tokio::test]
+async fn tcp_blind_search_with_limit() {
+    let server = TestServer::start().await.expect("server failed to start");
+    let mut client = shroudb_veil_client::VeilClient::connect(&server.tcp_addr)
+        .await
+        .expect("connect failed");
+
+    client.index_create("e2ee").await.unwrap();
+
+    let key = BlindKey::from_bytes(vec![0x42u8; 32]).unwrap();
+
+    for i in 0..10 {
+        let tokens = tokenize_and_blind(&key, "common term");
+        let tokens_b64 = encode_for_wire(&tokens).unwrap();
+        client
+            .put("e2ee", &format!("m{i}"), &tokens_b64, None, true)
+            .await
+            .unwrap();
+    }
+
+    let query = tokenize_and_blind(&key, "common");
+    let query_b64 = encode_for_wire(&query).unwrap();
+    let result = client
+        .search("e2ee", &query_b64, Some("exact"), None, Some(3), true)
+        .await
+        .unwrap();
+    assert_eq!(result.results.len(), 3);
+}
+
+#[tokio::test]
+async fn tcp_blind_put_then_delete() {
+    let server = TestServer::start().await.expect("server failed to start");
+    let mut client = shroudb_veil_client::VeilClient::connect(&server.tcp_addr)
+        .await
+        .expect("connect failed");
+
+    client.index_create("e2ee").await.unwrap();
+
+    let key = BlindKey::from_bytes(vec![0x42u8; 32]).unwrap();
+
+    let tokens = tokenize_and_blind(&key, "secret message");
+    let tokens_b64 = encode_for_wire(&tokens).unwrap();
+    client
+        .put("e2ee", "m1", &tokens_b64, None, true)
+        .await
+        .unwrap();
+
+    // Delete the entry
+    client.delete("e2ee", "m1").await.unwrap();
+
+    // Should no longer be found
+    let query = tokenize_and_blind(&key, "secret");
+    let query_b64 = encode_for_wire(&query).unwrap();
+    let result = client
+        .search("e2ee", &query_b64, Some("exact"), None, None, true)
+        .await
+        .unwrap();
+    assert_eq!(result.matched, 0);
+}
+
+#[tokio::test]
+async fn tcp_blind_fuzzy_search() {
+    let server = TestServer::start().await.expect("server failed to start");
+    let mut client = shroudb_veil_client::VeilClient::connect(&server.tcp_addr)
+        .await
+        .expect("connect failed");
+
+    client.index_create("e2ee").await.unwrap();
+
+    let key = BlindKey::from_bytes(vec![0x42u8; 32]).unwrap();
+
+    let tokens = tokenize_and_blind(&key, "hello");
+    client
+        .put("e2ee", "m1", &encode_for_wire(&tokens).unwrap(), None, true)
+        .await
+        .unwrap();
+
+    let tokens = tokenize_and_blind(&key, "helicopter");
+    client
+        .put("e2ee", "m2", &encode_for_wire(&tokens).unwrap(), None, true)
+        .await
+        .unwrap();
+
+    let tokens = tokenize_and_blind(&key, "goodbye");
+    client
+        .put("e2ee", "m3", &encode_for_wire(&tokens).unwrap(), None, true)
+        .await
+        .unwrap();
+
+    // Fuzzy "helo" should match hello and helicopter, not goodbye
+    let query = tokenize_and_blind(&key, "helo");
+    let query_b64 = encode_for_wire(&query).unwrap();
+    let result = client
+        .search("e2ee", &query_b64, Some("fuzzy"), None, None, true)
+        .await
+        .unwrap();
+    assert!(result.matched >= 1);
+    let ids: Vec<&str> = result.results.iter().map(|h| h.id.as_str()).collect();
+    assert!(!ids.contains(&"m3"), "goodbye should not match helo");
+}
+
+#[tokio::test]
+async fn tcp_blind_put_invalid_base64_rejected() {
+    let server = TestServer::start().await.expect("server failed to start");
+    let mut client = shroudb_veil_client::VeilClient::connect(&server.tcp_addr)
+        .await
+        .expect("connect failed");
+
+    client.index_create("e2ee").await.unwrap();
+
+    let err = client
+        .put("e2ee", "m1", "not-valid-base64!!!", None, true)
+        .await;
+    assert!(err.is_err(), "invalid base64 should be rejected");
+}
+
+#[tokio::test]
+async fn tcp_blind_put_invalid_json_rejected() {
+    let server = TestServer::start().await.expect("server failed to start");
+    let mut client = shroudb_veil_client::VeilClient::connect(&server.tcp_addr)
+        .await
+        .expect("connect failed");
+
+    client.index_create("e2ee").await.unwrap();
+
+    // Valid base64 but not a valid BlindTokenSet JSON
+    let bad = STANDARD.encode(b"not json");
+    let err = client.put("e2ee", "m1", &bad, None, true).await;
+    assert!(err.is_err(), "invalid token JSON should be rejected");
+}
+
+#[tokio::test]
+async fn tcp_blind_search_empty_tokens_rejected() {
+    let server = TestServer::start().await.expect("server failed to start");
+    let mut client = shroudb_veil_client::VeilClient::connect(&server.tcp_addr)
+        .await
+        .expect("connect failed");
+
+    client.index_create("e2ee").await.unwrap();
+
+    // Empty token set
+    let empty = STANDARD.encode(br#"{"words":[],"trigrams":[]}"#);
+    let err = client
+        .search("e2ee", &empty, Some("exact"), None, None, true)
+        .await;
+    assert!(err.is_err(), "empty tokens should be rejected");
+}
+
+#[tokio::test]
+async fn tcp_blind_put_nonexistent_index_rejected() {
+    let server = TestServer::start().await.expect("server failed to start");
+    let mut client = shroudb_veil_client::VeilClient::connect(&server.tcp_addr)
+        .await
+        .expect("connect failed");
+
+    let key = BlindKey::from_bytes(vec![0x42u8; 32]).unwrap();
+    let tokens = tokenize_and_blind(&key, "test");
+    let tokens_b64 = encode_for_wire(&tokens).unwrap();
+
+    let err = client
+        .put("nonexistent", "m1", &tokens_b64, None, true)
+        .await;
+    assert!(err.is_err(), "nonexistent index should be rejected");
+}
+
+#[tokio::test]
+async fn tcp_blind_different_keys_dont_cross_search() {
+    let server = TestServer::start().await.expect("server failed to start");
+    let mut client = shroudb_veil_client::VeilClient::connect(&server.tcp_addr)
+        .await
+        .expect("connect failed");
+
+    client.index_create("e2ee").await.unwrap();
+
+    // Two different client keys — simulating two different conversations
+    let key_a = BlindKey::from_bytes(vec![0x42u8; 32]).unwrap();
+    let key_b = BlindKey::from_bytes(vec![0x43u8; 32]).unwrap();
+
+    // Put with key_a
+    let tokens = tokenize_and_blind(&key_a, "hello world");
+    client
+        .put("e2ee", "m1", &encode_for_wire(&tokens).unwrap(), None, true)
+        .await
+        .unwrap();
+
+    // Search with key_b — should NOT find anything because HMAC keys differ
+    let query = tokenize_and_blind(&key_b, "hello");
+    let result = client
+        .search(
+            "e2ee",
+            &encode_for_wire(&query).unwrap(),
+            Some("exact"),
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        result.matched, 0,
+        "different HMAC keys must not cross-match"
+    );
+
+    // Search with key_a — should find it
+    let query = tokenize_and_blind(&key_a, "hello");
+    let result = client
+        .search(
+            "e2ee",
+            &encode_for_wire(&query).unwrap(),
+            Some("exact"),
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.matched, 1, "same HMAC key should match");
+}
+
+#[tokio::test]
+async fn acl_blind_put_requires_write_scope() {
+    let mut config = auth_server_config();
+    config.indexes.push("users".to_string());
+
+    let server = TestServer::start_with_config(config)
+        .await
+        .expect("server failed to start");
+    let mut client = shroudb_veil_client::VeilClient::connect(&server.tcp_addr)
+        .await
+        .expect("connect failed");
+
+    client
+        .auth("readonly-token")
+        .await
+        .expect("readonly auth failed");
+
+    let key = BlindKey::from_bytes(vec![0x42u8; 32]).unwrap();
+    let tokens = tokenize_and_blind(&key, "test");
+    let tokens_b64 = encode_for_wire(&tokens).unwrap();
+
+    // BLIND_PUT requires Write scope — readonly should fail
+    let err = client.put("users", "m1", &tokens_b64, None, true).await;
+    assert!(err.is_err(), "readonly should not blind_put");
+}
+
+#[tokio::test]
+async fn acl_blind_search_allowed_with_read_scope() {
+    let mut config = auth_server_config();
+    config.indexes.push("users".to_string());
+
+    let server = TestServer::start_with_config(config)
+        .await
+        .expect("server failed to start");
+    let mut client = shroudb_veil_client::VeilClient::connect(&server.tcp_addr)
+        .await
+        .expect("connect failed");
+
+    client
+        .auth("readonly-token")
+        .await
+        .expect("readonly auth failed");
+
+    let key = BlindKey::from_bytes(vec![0x42u8; 32]).unwrap();
+    let query = tokenize_and_blind(&key, "test");
+    let query_b64 = encode_for_wire(&query).unwrap();
+
+    // BLIND_SEARCH requires Read scope — readonly should succeed
+    let result = client
+        .search("users", &query_b64, Some("exact"), None, None, true)
+        .await;
+    assert!(result.is_ok(), "readonly should be able to blind_search");
 }

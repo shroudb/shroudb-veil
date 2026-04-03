@@ -32,6 +32,7 @@ anyhow.workspace = true
 
 [dev-dependencies]
 shroudb-veil-client.workspace = true
+shroudb-veil-blind.workspace = true
 tokio = { version = "1", features = ["full"] }
 tempfile = "3"
 serde_json.workspace = true

@@ -56,14 +56,15 @@ errors = ["NOTFOUND", "BADARG"]
 # ── Entry Operations ─────────────────────────────────────────────
 
 [commands.PUT]
-syntax = "PUT <index> <id> <plaintext_b64> [FIELD <name>]"
-description = "Tokenize plaintext and store the blind tokens under the given entry ID"
+syntax = "PUT <index> <id> <data_b64> [FIELD <name>] [BLIND]"
+description = "Store blind tokens for an entry. In standard mode, data_b64 is base64-encoded plaintext (server tokenizes). With BLIND flag, data_b64 is base64-encoded BlindTokenSet JSON (client pre-tokenized, for E2EE)."
 acl = "namespace:write"
 parameters = [
     { name = "index", type = "string", required = true, description = "Index name" },
     { name = "id", type = "string", required = true, description = "Entry identifier" },
-    { name = "plaintext_b64", type = "string", required = true, description = "Base64-encoded plaintext to index" },
-    { name = "field", type = "string", required = false, description = "JSON field to extract for tokenization" },
+    { name = "data_b64", type = "string", required = true, description = "Base64-encoded plaintext (standard) or BlindTokenSet JSON (BLIND mode)" },
+    { name = "field", type = "string", required = false, description = "JSON field to extract for tokenization (standard mode only)" },
+    { name = "blind", type = "flag", required = false, description = "E2EE mode: treat data_b64 as pre-computed blind tokens" },
 ]
 response = { fields = ["status", "id", "version"] }
 errors = ["NOTFOUND", "BADARG"]
@@ -82,15 +83,16 @@ errors = ["NOTFOUND"]
 # ── Search ───────────────────────────────────────────────────────
 
 [commands.SEARCH]
-syntax = "SEARCH <index> <query> [MODE exact|contains|prefix|fuzzy] [FIELD <name>] [LIMIT <n>]"
-description = "Search a blind index. Tokenizes the query, generates blind tokens, and compares against stored entries."
+syntax = "SEARCH <index> <query> [MODE exact|contains|prefix|fuzzy] [FIELD <name>] [LIMIT <n>] [BLIND]"
+description = "Search a blind index. In standard mode, query is plain text (server tokenizes). With BLIND flag, query is base64-encoded BlindTokenSet JSON (client pre-tokenized, for E2EE)."
 acl = "namespace:read"
 parameters = [
     { name = "index", type = "string", required = true, description = "Index name" },
-    { name = "query", type = "string", required = true, description = "Search query text" },
+    { name = "query", type = "string", required = true, description = "Search query text (standard) or base64-encoded BlindTokenSet JSON (BLIND mode)" },
     { name = "mode", type = "string", required = false, default = "contains", description = "Match mode: exact, contains, prefix, fuzzy" },
-    { name = "field", type = "string", required = false, description = "JSON field to extract for tokenization" },
+    { name = "field", type = "string", required = false, description = "JSON field to extract for tokenization (standard mode only)" },
     { name = "limit", type = "integer", required = false, default = 100, description = "Maximum results to return" },
+    { name = "blind", type = "flag", required = false, description = "E2EE mode: treat query as pre-computed blind tokens" },
 ]
 response = { fields = ["status", "scanned", "matched", "results"] }
 errors = ["NOTFOUND", "BADARG"]
