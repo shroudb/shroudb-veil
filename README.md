@@ -23,9 +23,9 @@ cargo run -p shroudb-veil-cli -- SEARCH users johnson MODE exact
 | `INDEX LIST` | List all indexes | Public |
 | `INDEX INFO <name>` | Get index info (entry count, created_at) | Read |
 | `TOKENIZE <index> <b64> [FIELD <f>]` | Generate blind tokens without storing | Read |
-| `PUT <index> <id> <b64> [FIELD <f>]` | Tokenize + store blind tokens | Write |
+| `PUT <index> <id> <b64> [FIELD <f>] [BLIND]` | Tokenize + store blind tokens | Write |
 | `DELETE <index> <id>` | Remove entry from index | Write |
-| `SEARCH <index> <query> [MODE m] [FIELD f] [LIMIT n]` | Search the index | Read |
+| `SEARCH <index> <query> [MODE m] [FIELD f] [LIMIT n] [BLIND]` | Search the index | Read |
 | `HEALTH` | Health check | Public |
 | `PING` | Ping-pong | Public |
 | `AUTH <token>` | Authenticate connection | Public |
@@ -46,6 +46,21 @@ PUT contacts c1 eyJuYW1lIjoiQWxpY2UiLCJjaXR5IjoiUG9ydGxhbmQifQ== FIELD name
 ```
 
 Without `FIELD`, all string values in the JSON object are concatenated.
+
+### BLIND Mode (E2EE)
+
+For end-to-end encrypted workflows where plaintext must never reach the server, use the `BLIND` flag. The client pre-computes blind tokens locally using the `shroudb-veil-blind` crate and sends them directly:
+
+```
+PUT users u1 <blind_token_set_b64> BLIND
+SEARCH users <blind_token_set_b64> MODE exact BLIND
+```
+
+In standard mode (no `BLIND`): `data_b64` is base64-encoded plaintext and `query` is plain text. The server tokenizes and blinds.
+
+In `BLIND` mode: `data_b64` is a base64-encoded `BlindTokenSet` JSON, and `query` is a base64-encoded `BlindTokenSet` JSON. The server stores and searches them directly without touching plaintext.
+
+The `shroudb-veil-blind` crate provides client-side tokenization and HMAC blinding via `BlindKey`, `tokenize_and_blind()`, and `encode_for_wire()`.
 
 ## Configuration
 
@@ -96,6 +111,7 @@ shroudb-veil-protocol/    — RESP3 command parsing + dispatch
 shroudb-veil-server/      — TCP server binary
 shroudb-veil-client/      — Rust client SDK
 shroudb-veil-cli/         — CLI tool
+shroudb-veil-blind/       — Client-side tokenizer + HMAC blinding for E2EE workflows
 ```
 
 ### How Blind Indexing Works

@@ -18,6 +18,7 @@ shroudb-veil-protocol/  # RESP3 command parsing + dispatch
 shroudb-veil-server/    # Standalone TCP binary
 shroudb-veil-client/    # Typed Rust SDK
 shroudb-veil-cli/       # CLI tool
+shroudb-veil-blind/     # Client-side tokenizer + HMAC blinding for E2EE (BLIND mode)
 ```
 
 ## RESP3 Commands
@@ -40,14 +41,14 @@ shroudb-veil-cli/       # CLI tool
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `PUT` | `<index> <id> <plaintext_b64> [FIELD <name>]` | `{status, id, version}` | Tokenize + blind + store |
+| `PUT` | `<index> <id> <plaintext_b64> [FIELD <name>] [BLIND]` | `{status, id, version}` | Tokenize + blind + store (BLIND: client provides pre-computed tokens) |
 | `DELETE` | `<index> <id>` | `{status, id}` | Remove entry from index |
 
 ### Search
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `SEARCH` | `<index> <query> [MODE exact\|contains\|prefix\|fuzzy] [FIELD <name>] [LIMIT <n>]` | `{status, scanned, matched, results}` | Search by blind token comparison |
+| `SEARCH` | `<index> <query> [MODE exact\|contains\|prefix\|fuzzy] [FIELD <name>] [LIMIT <n>] [BLIND]` | `{status, scanned, matched, results}` | Search by blind token comparison (BLIND: query is pre-computed tokens) |
 
 ### Operational
 
@@ -69,6 +70,12 @@ shroudb-veil-cli/       # CLI tool
 
 > SEARCH users "alice" MODE contains FIELD name LIMIT 10
 {"status":"ok","scanned":50,"matched":1,"results":[{"id":"alice","score":1.0}]}
+
+> PUT users bob <blind_token_set_b64> BLIND
+{"status":"ok","id":"bob","version":1}
+
+> SEARCH users <blind_token_set_b64> MODE exact BLIND
+{"status":"ok","scanned":50,"matched":1,"results":[{"id":"bob","score":1.0}]}
 ```
 
 ## Search Flow
@@ -95,6 +102,20 @@ Query → Tokenize → Blind (HMAC-SHA256) → Scan entries → Compare blind to
 | `contains` | At least one query word matches | Any match (score=matched/total) | Keyword search |
 | `prefix` | Trigram overlap | ≥60% overlap | Prefix search, typo tolerance |
 | `fuzzy` | Trigram overlap | ≥30% overlap | Edit-distance similarity |
+
+## BLIND Mode (E2EE)
+
+When the `BLIND` flag is present on `PUT` or `SEARCH`, the server skips tokenization and blinding. Instead, the client provides pre-computed blind tokens directly.
+
+- **Standard mode:** `data_b64` / `query` = base64-encoded plaintext / plain text. Server tokenizes and blinds.
+- **BLIND mode:** `data_b64` / `query` = base64-encoded `BlindTokenSet` JSON. Server stores/searches directly.
+
+The `shroudb-veil-blind` crate provides client-side tokenization and HMAC blinding:
+- `BlindKey` — HMAC key for client-side blinding
+- `tokenize_and_blind()` — tokenize plaintext and produce a `BlindTokenSet`
+- `encode_for_wire()` — base64-encode the result for the wire protocol
+
+This enables E2EE workflows where plaintext never leaves the client.
 
 ## Public API (Embedded Mode)
 
@@ -163,4 +184,5 @@ If `FIELD <name>` specified: extract that field's string value from JSON. Otherw
 | `shroudb-store` | Provides Store trait for index/token persistence |
 | `shroudb-crypto` | HMAC-SHA256, CSPRNG key generation |
 | `shroudb-sigil` | Calls Veil for `searchable` PII fields via `VeilOps` trait |
+| `shroudb-veil-blind` | Client-side tokenizer + HMAC blinding for E2EE BLIND mode |
 | `shroudb-moat` | Embeds Veil; wires Cipher dependency for Sigil integration |

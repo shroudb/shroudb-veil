@@ -110,6 +110,12 @@ With field extraction:
 PUT contacts c1 eyJuYW1lIjoiQWxpY2UiLCJjaXR5IjoiUG9ydGxhbmQifQ== FIELD name
 ```
 
+With BLIND mode (client provides pre-computed blind tokens):
+```
+PUT users u1 <blind_token_set_b64> BLIND
+→ {"status":"ok","id":"u1","version":1}
+```
+
 Putting to an existing ID overwrites the tokens.
 
 #### DELETE
@@ -130,10 +136,43 @@ SEARCH users johnson MODE exact LIMIT 10
 → {"status":"ok","scanned":100,"matched":2,"results":[{"id":"u1","score":1.0},{"id":"u3","score":1.0}]}
 ```
 
+With BLIND mode (client provides pre-computed blind tokens):
+```
+SEARCH users <blind_token_set_b64> MODE exact BLIND
+→ {"status":"ok","scanned":100,"matched":2,"results":[{"id":"u1","score":1.0},{"id":"u3","score":1.0}]}
+```
+
 Parameters:
 - `MODE` — exact, contains (default), prefix, fuzzy
 - `FIELD` — JSON field to extract from query (not commonly used for search)
 - `LIMIT` — Maximum results (default: 100)
+- `BLIND` — Client provides pre-computed blind tokens (see E2EE Workflow below)
+
+## E2EE Workflow (BLIND Mode)
+
+In the standard workflow, the client sends plaintext to the server, which tokenizes and blinds it. This is secure at rest and during search, but the server sees plaintext during ingestion.
+
+For end-to-end encrypted (E2EE) workflows where plaintext must never reach the server, clients use the `BLIND` flag. The client performs tokenization and HMAC blinding locally, then sends the resulting `BlindTokenSet` directly.
+
+**Standard mode (no BLIND):**
+1. Client sends plaintext (base64-encoded) to server
+2. Server tokenizes plaintext into word + trigram tokens
+3. Server blinds tokens with per-index HMAC key
+4. Server stores blind tokens
+
+**BLIND mode:**
+1. Client tokenizes plaintext locally
+2. Client blinds tokens with a `BlindKey` (shared out of band)
+3. Client base64-encodes the `BlindTokenSet` JSON
+4. Client sends the encoded blind tokens with the `BLIND` flag
+5. Server stores the blind tokens directly — no tokenization, no plaintext
+
+The `shroudb-veil-blind` crate provides the client-side implementation:
+- `BlindKey` — HMAC key for client-side blinding
+- `tokenize_and_blind()` — tokenize plaintext and produce a `BlindTokenSet`
+- `encode_for_wire()` — base64-encode the `BlindTokenSet` for the wire protocol
+
+Search works the same way: in BLIND mode, the `query` parameter is a base64-encoded `BlindTokenSet` instead of plain text.
 
 ## Authentication
 
