@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+wasm = ["dep:getrandom"]
+
 [dependencies]
 shroudb-veil-core.workspace = true
 
@@ -17,3 +21,6 @@ thiserror.workspace = true
 hex.workspace = true
 base64.workspace = true
 zeroize.workspace = true
+
+# WASM browser entropy (crypto.getRandomValues)
+getrandom = { version = "0.2", features = ["js"], optional = true }
