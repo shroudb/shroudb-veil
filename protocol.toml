@@ -20,7 +20,7 @@ acl = "admin"
 parameters = [
     { name = "name", type = "string", required = true, description = "Index name (alphanumeric, hyphens, underscores)" },
 ]
-response = { fields = ["status", "index", "created_at"] }
+response = { fields = ["status", "index", "created_at", "tokenizer_version"] }
 errors = ["EXISTS", "BADARG"]
 
 [commands.INDEX_LIST]
@@ -36,7 +36,48 @@ acl = "namespace:read"
 parameters = [
     { name = "name", type = "string", required = true },
 ]
-response = { fields = ["index", "created_at", "entry_count"] }
+response = { fields = ["index", "created_at", "entry_count", "tokenizer_version"] }
+errors = ["NOTFOUND"]
+
+[commands.INDEX_ROTATE]
+syntax = "INDEX ROTATE <name>"
+description = "Rotate an index's HMAC key. Generates a new key, deletes all existing entries. The application must re-index all entries after rotation."
+acl = "admin"
+parameters = [
+    { name = "name", type = "string", required = true, description = "Index name" },
+]
+response = { fields = ["status", "index", "rotated_at", "entry_count"] }
+errors = ["NOTFOUND"]
+
+[commands.INDEX_DESTROY]
+syntax = "INDEX DESTROY <name>"
+description = "Crypto-shred an index: zeroize the HMAC key, delete all entries, and remove the index. After destruction, the index name can be reused."
+acl = "admin"
+parameters = [
+    { name = "name", type = "string", required = true, description = "Index name" },
+]
+response = { fields = ["status", "index", "deleted_entries"] }
+errors = ["NOTFOUND"]
+
+[commands.INDEX_REINDEX]
+syntax = "INDEX REINDEX <name>"
+description = "Clear all entries and update the tokenizer version to current. The HMAC key is preserved. After reindex, the application must re-submit all entries via PUT. Use this when the tokenizer algorithm has been upgraded."
+acl = "admin"
+parameters = [
+    { name = "name", type = "string", required = true, description = "Index name" },
+]
+response = { fields = ["status", "index", "tokenizer_version", "entries_cleared"] }
+errors = ["NOTFOUND"]
+
+[commands.INDEX_RECONCILE]
+syntax = "INDEX RECONCILE <name> <id1> [id2 ...]"
+description = "Remove orphaned entries from the index. Compares stored entry IDs against the provided valid set and deletes any entries not in the set."
+acl = "admin"
+parameters = [
+    { name = "name", type = "string", required = true, description = "Index name" },
+    { name = "valid_ids", type = "string[]", required = true, description = "Authoritative list of valid entry IDs" },
+]
+response = { fields = ["status", "index", "orphans_removed"] }
 errors = ["NOTFOUND"]
 
 # ── Token Operations ─────────────────────────────────────────────

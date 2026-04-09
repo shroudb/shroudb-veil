@@ -9,6 +9,10 @@ use crate::response::VeilResponse;
 const SUPPORTED_COMMANDS: &[&str] = &[
     "AUTH",
     "INDEX CREATE",
+    "INDEX ROTATE",
+    "INDEX DESTROY",
+    "INDEX REINDEX",
+    "INDEX RECONCILE",
     "INDEX LIST",
     "INDEX INFO",
     "TOKENIZE",
@@ -44,9 +48,50 @@ pub async fn dispatch<S: Store>(
                 "status": "ok",
                 "index": info.name,
                 "created_at": info.created_at,
+                "tokenizer_version": info.tokenizer_version,
             })),
             Err(e) => VeilResponse::error(e.to_string()),
         },
+
+        VeilCommand::IndexRotate { name } => match engine.index_rotate(&name).await {
+            Ok(info) => VeilResponse::ok(serde_json::json!({
+                "status": "ok",
+                "index": info.name,
+                "rotated_at": info.created_at,
+                "entry_count": info.entry_count,
+            })),
+            Err(e) => VeilResponse::error(e.to_string()),
+        },
+
+        VeilCommand::IndexDestroy { name } => match engine.index_destroy(&name).await {
+            Ok(deleted) => VeilResponse::ok(serde_json::json!({
+                "status": "ok",
+                "index": name,
+                "deleted_entries": deleted,
+            })),
+            Err(e) => VeilResponse::error(e.to_string()),
+        },
+
+        VeilCommand::IndexReindex { name } => match engine.index_reindex(&name).await {
+            Ok(result) => VeilResponse::ok(serde_json::json!({
+                "status": "ok",
+                "index": result.name,
+                "tokenizer_version": result.tokenizer_version,
+                "entries_cleared": result.entries_cleared,
+            })),
+            Err(e) => VeilResponse::error(e.to_string()),
+        },
+
+        VeilCommand::IndexReconcile { name, valid_ids } => {
+            match engine.reconcile_orphans(&name, &valid_ids).await {
+                Ok(result) => VeilResponse::ok(serde_json::json!({
+                    "status": "ok",
+                    "index": name,
+                    "orphans_removed": result.orphans_removed,
+                })),
+                Err(e) => VeilResponse::error(e.to_string()),
+            }
+        }
 
         VeilCommand::IndexList => {
             let names = engine.index_list();
@@ -58,6 +103,7 @@ pub async fn dispatch<S: Store>(
                 "index": info.name,
                 "created_at": info.created_at,
                 "entry_count": info.entry_count,
+                "tokenizer_version": info.tokenizer_version,
             })),
             Err(e) => VeilResponse::error(e.to_string()),
         },
@@ -380,6 +426,110 @@ mod tests {
             }],
             None,
         )
+    }
+
+    #[tokio::test]
+    async fn reindex_flow() {
+        let engine = setup().await;
+
+        // Create index and add entries
+        let cmd = parse_command(&["INDEX", "CREATE", "test"]).unwrap();
+        dispatch(&engine, cmd, None).await;
+
+        let cmd = parse_command(&["PUT", "test", "e1", "SGVsbG8="]).unwrap();
+        dispatch(&engine, cmd, None).await;
+        let cmd = parse_command(&["PUT", "test", "e2", "V29ybGQ="]).unwrap();
+        dispatch(&engine, cmd, None).await;
+
+        // Reindex
+        let cmd = parse_command(&["INDEX", "REINDEX", "test"]).unwrap();
+        let resp = dispatch(&engine, cmd, None).await;
+        assert!(resp.is_ok(), "reindex failed: {resp:?}");
+
+        match &resp {
+            VeilResponse::Ok(v) => {
+                assert_eq!(v["index"], "test");
+                assert_eq!(v["entries_cleared"], 2);
+                assert!(v["tokenizer_version"].as_u64().unwrap() > 0);
+            }
+            _ => panic!("expected ok"),
+        }
+
+        // Verify entries are cleared
+        let cmd = parse_command(&["INDEX", "INFO", "test"]).unwrap();
+        let resp = dispatch(&engine, cmd, None).await;
+        match &resp {
+            VeilResponse::Ok(v) => {
+                assert_eq!(v["entry_count"], 0);
+            }
+            _ => panic!("expected ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reconcile_flow() {
+        let engine = setup().await;
+
+        // Create index and add entries
+        let cmd = parse_command(&["INDEX", "CREATE", "test"]).unwrap();
+        dispatch(&engine, cmd, None).await;
+
+        let cmd = parse_command(&["PUT", "test", "a", "YWxwaGE="]).unwrap();
+        dispatch(&engine, cmd, None).await;
+        let cmd = parse_command(&["PUT", "test", "b", "YnJhdm8="]).unwrap();
+        dispatch(&engine, cmd, None).await;
+        let cmd = parse_command(&["PUT", "test", "c", "Y2hhcmxpZQ=="]).unwrap();
+        dispatch(&engine, cmd, None).await;
+
+        // Reconcile — only "b" is valid
+        let cmd = parse_command(&["INDEX", "RECONCILE", "test", "b"]).unwrap();
+        let resp = dispatch(&engine, cmd, None).await;
+        assert!(resp.is_ok(), "reconcile failed: {resp:?}");
+
+        match &resp {
+            VeilResponse::Ok(v) => {
+                assert_eq!(v["orphans_removed"], 2);
+            }
+            _ => panic!("expected ok"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reindex_nonexistent_index_returns_error() {
+        let engine = setup().await;
+
+        let cmd = parse_command(&["INDEX", "REINDEX", "nope"]).unwrap();
+        let resp = dispatch(&engine, cmd, None).await;
+        assert!(!resp.is_ok());
+    }
+
+    #[tokio::test]
+    async fn reconcile_nonexistent_index_returns_error() {
+        let engine = setup().await;
+
+        let cmd = parse_command(&["INDEX", "RECONCILE", "nope", "id1"]).unwrap();
+        let resp = dispatch(&engine, cmd, None).await;
+        assert!(!resp.is_ok());
+    }
+
+    #[tokio::test]
+    async fn reindex_requires_admin() {
+        let engine = setup().await;
+        let ctx = write_context();
+
+        let cmd = parse_command(&["INDEX", "REINDEX", "test"]).unwrap();
+        let resp = dispatch(&engine, cmd, Some(&ctx)).await;
+        assert!(!resp.is_ok(), "non-admin should not be able to reindex");
+    }
+
+    #[tokio::test]
+    async fn reconcile_requires_admin() {
+        let engine = setup().await;
+        let ctx = write_context();
+
+        let cmd = parse_command(&["INDEX", "RECONCILE", "test", "id1"]).unwrap();
+        let resp = dispatch(&engine, cmd, Some(&ctx)).await;
+        assert!(!resp.is_ok(), "non-admin should not be able to reconcile");
     }
 
     #[tokio::test]

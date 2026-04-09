@@ -12,6 +12,19 @@ pub enum VeilCommand {
     IndexCreate {
         name: String,
     },
+    IndexRotate {
+        name: String,
+    },
+    IndexDestroy {
+        name: String,
+    },
+    IndexReindex {
+        name: String,
+    },
+    IndexReconcile {
+        name: String,
+        valid_ids: Vec<String>,
+    },
     IndexList,
     IndexInfo {
         name: String,
@@ -70,8 +83,12 @@ impl VeilCommand {
             // Listing index names is not sensitive
             VeilCommand::IndexList => AclRequirement::None,
 
-            // Index creation is a structural change
-            VeilCommand::IndexCreate { .. } => AclRequirement::Admin,
+            // Index creation, rotation, destruction, reindex, and reconcile are structural changes
+            VeilCommand::IndexCreate { .. }
+            | VeilCommand::IndexRotate { .. }
+            | VeilCommand::IndexDestroy { .. }
+            | VeilCommand::IndexReindex { .. }
+            | VeilCommand::IndexReconcile { .. } => AclRequirement::Admin,
 
             // Read operations
             VeilCommand::Search { index, .. }
@@ -133,6 +150,40 @@ fn parse_index(args: &[&str]) -> Result<VeilCommand, String> {
             }
             Ok(VeilCommand::IndexCreate {
                 name: args[2].to_string(),
+            })
+        }
+        "ROTATE" => {
+            if args.len() < 3 {
+                return Err("INDEX ROTATE <name>".into());
+            }
+            Ok(VeilCommand::IndexRotate {
+                name: args[2].to_string(),
+            })
+        }
+        "DESTROY" => {
+            if args.len() < 3 {
+                return Err("INDEX DESTROY <name>".into());
+            }
+            Ok(VeilCommand::IndexDestroy {
+                name: args[2].to_string(),
+            })
+        }
+        "REINDEX" => {
+            if args.len() < 3 {
+                return Err("INDEX REINDEX <name>".into());
+            }
+            Ok(VeilCommand::IndexReindex {
+                name: args[2].to_string(),
+            })
+        }
+        "RECONCILE" => {
+            if args.len() < 4 {
+                return Err("INDEX RECONCILE <name> <id1> [id2 ...]".into());
+            }
+            let valid_ids = args[3..].iter().map(|s| s.to_string()).collect();
+            Ok(VeilCommand::IndexReconcile {
+                name: args[2].to_string(),
+                valid_ids,
             })
         }
         "LIST" => Ok(VeilCommand::IndexList),
@@ -380,6 +431,55 @@ mod tests {
     fn parse_ping() {
         let cmd = parse_command(&["PING"]).unwrap();
         assert!(matches!(cmd, VeilCommand::Ping));
+    }
+
+    #[test]
+    fn parse_index_reindex() {
+        let cmd = parse_command(&["INDEX", "REINDEX", "users"]).unwrap();
+        assert!(matches!(
+            cmd,
+            VeilCommand::IndexReindex { name } if name == "users"
+        ));
+    }
+
+    #[test]
+    fn parse_index_reindex_missing_name() {
+        assert!(parse_command(&["INDEX", "REINDEX"]).is_err());
+    }
+
+    #[test]
+    fn parse_index_reconcile() {
+        let cmd = parse_command(&["INDEX", "RECONCILE", "users", "id1", "id2", "id3"]).unwrap();
+        match cmd {
+            VeilCommand::IndexReconcile { name, valid_ids } => {
+                assert_eq!(name, "users");
+                assert_eq!(valid_ids, vec!["id1", "id2", "id3"]);
+            }
+            _ => panic!("expected IndexReconcile"),
+        }
+    }
+
+    #[test]
+    fn parse_index_reconcile_missing_ids() {
+        assert!(parse_command(&["INDEX", "RECONCILE", "users"]).is_err());
+    }
+
+    #[test]
+    fn parse_index_rotate() {
+        let cmd = parse_command(&["INDEX", "ROTATE", "users"]).unwrap();
+        assert!(matches!(
+            cmd,
+            VeilCommand::IndexRotate { name } if name == "users"
+        ));
+    }
+
+    #[test]
+    fn parse_index_destroy() {
+        let cmd = parse_command(&["INDEX", "DESTROY", "users"]).unwrap();
+        assert!(matches!(
+            cmd,
+            VeilCommand::IndexDestroy { name } if name == "users"
+        ));
     }
 
     #[test]

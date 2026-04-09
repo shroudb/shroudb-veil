@@ -33,7 +33,9 @@ use zeroize::Zeroizing;
 /// The tokenizer algorithm version. Clients should store this alongside
 /// their HMAC key so they know which tokenizer produced their blind tokens.
 /// A bump here means all existing blind tokens must be re-indexed.
-pub const TOKENIZER_VERSION: u32 = 1;
+///
+/// Re-exported from `shroudb-veil-core::tokenizer::TOKENIZER_VERSION`.
+pub const TOKENIZER_VERSION: u32 = tokenizer::TOKENIZER_VERSION;
 
 /// A client-side HMAC key for blind token generation.
 ///

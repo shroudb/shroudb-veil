@@ -12,6 +12,8 @@ use shroudb_store::Store;
 use shroudb_veil_core::error::VeilError;
 use shroudb_veil_core::index::BlindIndex;
 
+use shroudb_veil_core::tokenizer::TOKENIZER_VERSION;
+
 use crate::hmac_ops;
 
 const INDEXES_NAMESPACE: &str = "veil.indexes";
@@ -115,6 +117,7 @@ impl<S: Store> IndexManager<S> {
             name: name.to_string(),
             key_material: zeroize::Zeroizing::new(hex::encode(key_material.as_bytes())),
             created_at: now,
+            tokenizer_version: TOKENIZER_VERSION,
         };
 
         // Create the token storage namespace for this index
@@ -158,6 +161,193 @@ impl<S: Store> IndexManager<S> {
         &self.store
     }
 
+    /// Rotate an index's HMAC key. Generates a new key, deletes all existing
+    /// entries (they are invalid under the new key), and persists the updated index.
+    ///
+    /// After rotation, the application must re-index all entries with the new key.
+    /// For blind-mode clients, the new key material can be retrieved via `INDEX INFO`.
+    pub async fn rotate(&self, name: &str) -> Result<Arc<BlindIndex>, VeilError> {
+        // Verify the index exists
+        if !self.cache.contains_key(name) {
+            return Err(VeilError::IndexNotFound(name.to_string()));
+        }
+
+        // Generate new key material
+        let new_key = hmac_ops::generate_key_material()?;
+        let now = unix_now();
+
+        let updated = BlindIndex {
+            name: name.to_string(),
+            key_material: zeroize::Zeroizing::new(hex::encode(new_key.as_bytes())),
+            created_at: now,
+            tokenizer_version: TOKENIZER_VERSION,
+        };
+
+        // Delete all existing entries (they're invalid under the new key)
+        let tokens_ns = tokens_namespace(name);
+        let mut cursor = None;
+        let mut deleted = 0u64;
+        loop {
+            let page = self
+                .store
+                .list(&tokens_ns, None, cursor.as_deref(), 100)
+                .await
+                .map_err(|e| VeilError::Store(e.to_string()))?;
+
+            if page.keys.is_empty() {
+                break;
+            }
+
+            for key in &page.keys {
+                self.store
+                    .delete(&tokens_ns, key)
+                    .await
+                    .map_err(|e| VeilError::Store(e.to_string()))?;
+                deleted += 1;
+            }
+
+            cursor = page.cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        // Persist updated index
+        self.save(&updated).await?;
+        let updated = Arc::new(updated);
+        self.cache.insert(name.to_string(), Arc::clone(&updated));
+
+        // Reset entry count
+        self.entry_counts
+            .insert(name.to_string(), AtomicU64::new(0));
+
+        tracing::info!(index = name, deleted_entries = deleted, "index key rotated");
+
+        Ok(updated)
+    }
+
+    /// Re-index: clear all entries and update the tokenizer version to current.
+    ///
+    /// Unlike `rotate()`, this keeps the same HMAC key — it only clears entries
+    /// that were built with an outdated tokenizer algorithm. After reindex, the
+    /// application must re-submit all entries via PUT.
+    pub async fn reindex(&self, name: &str) -> Result<(Arc<BlindIndex>, u64), VeilError> {
+        let existing = self
+            .cache
+            .get(name)
+            .map(|r| Arc::clone(r.value()))
+            .ok_or_else(|| VeilError::IndexNotFound(name.to_string()))?;
+
+        // Delete all existing entries
+        let tokens_ns = tokens_namespace(name);
+        let mut cursor = None;
+        let mut deleted = 0u64;
+        loop {
+            let page = self
+                .store
+                .list(&tokens_ns, None, cursor.as_deref(), 100)
+                .await
+                .map_err(|e| VeilError::Store(e.to_string()))?;
+
+            if page.keys.is_empty() {
+                break;
+            }
+
+            for key in &page.keys {
+                self.store
+                    .delete(&tokens_ns, key)
+                    .await
+                    .map_err(|e| VeilError::Store(e.to_string()))?;
+                deleted += 1;
+            }
+
+            cursor = page.cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        // Update tokenizer version, keep the same key material
+        let updated = BlindIndex {
+            name: name.to_string(),
+            key_material: existing.key_material.clone(),
+            created_at: existing.created_at,
+            tokenizer_version: TOKENIZER_VERSION,
+        };
+
+        self.save(&updated).await?;
+        let updated = Arc::new(updated);
+        self.cache.insert(name.to_string(), Arc::clone(&updated));
+        self.entry_counts
+            .insert(name.to_string(), AtomicU64::new(0));
+
+        tracing::info!(
+            index = name,
+            deleted_entries = deleted,
+            tokenizer_version = TOKENIZER_VERSION,
+            "index reindexed (entries cleared, tokenizer version updated)"
+        );
+
+        Ok((updated, deleted))
+    }
+
+    /// Destroy an index: zeroize key material, delete all entries, and remove
+    /// the index from the Store and cache. After destruction, the index name
+    /// can be reused via `INDEX CREATE`.
+    pub async fn destroy(&self, name: &str) -> Result<u64, VeilError> {
+        if !self.cache.contains_key(name) {
+            return Err(VeilError::IndexNotFound(name.to_string()));
+        }
+
+        // Delete all entries in the token namespace
+        let tokens_ns = tokens_namespace(name);
+        let mut cursor = None;
+        let mut deleted = 0u64;
+        loop {
+            let page = self
+                .store
+                .list(&tokens_ns, None, cursor.as_deref(), 100)
+                .await
+                .map_err(|e| VeilError::Store(e.to_string()))?;
+
+            if page.keys.is_empty() {
+                break;
+            }
+
+            for key in &page.keys {
+                self.store
+                    .delete(&tokens_ns, key)
+                    .await
+                    .map_err(|e| VeilError::Store(e.to_string()))?;
+                deleted += 1;
+            }
+
+            cursor = page.cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        // Delete the index metadata from the Store (key material is zeroized
+        // when the Arc<BlindIndex> is dropped — Zeroizing<String> handles this)
+        self.store
+            .delete(INDEXES_NAMESPACE, name.as_bytes())
+            .await
+            .map_err(|e| VeilError::Store(e.to_string()))?;
+
+        // Remove from cache (this drops the Arc, triggering zeroize on the key)
+        self.cache.remove(name);
+        self.entry_counts.remove(name);
+
+        tracing::info!(
+            index = name,
+            deleted_entries = deleted,
+            "index destroyed (crypto-shred)"
+        );
+
+        Ok(deleted)
+    }
+
     /// Seed an index from config if it doesn't already exist.
     pub async fn seed_if_absent(&self, name: &str) -> Result<(), VeilError> {
         if self.cache.contains_key(name) {
@@ -172,14 +362,14 @@ impl<S: Store> IndexManager<S> {
     pub fn entry_count(&self, name: &str) -> u64 {
         self.entry_counts
             .get(name)
-            .map(|c| c.load(Ordering::Relaxed))
+            .map(|c| c.load(Ordering::Acquire))
             .unwrap_or(0)
     }
 
     /// Increment the cached entry count for an index.
     pub fn increment_entry_count(&self, name: &str) {
         if let Some(c) = self.entry_counts.get(name) {
-            c.fetch_add(1, Ordering::Relaxed);
+            c.fetch_add(1, Ordering::Release);
         }
     }
 
@@ -188,14 +378,14 @@ impl<S: Store> IndexManager<S> {
         if let Some(c) = self.entry_counts.get(name) {
             // Use a CAS loop to avoid underflow.
             loop {
-                let current = c.load(Ordering::Relaxed);
+                let current = c.load(Ordering::Acquire);
                 if current == 0 {
                     break;
                 }
                 if c.compare_exchange_weak(
                     current,
                     current - 1,
-                    Ordering::Relaxed,
+                    Ordering::Release,
                     Ordering::Relaxed,
                 )
                 .is_ok()
@@ -357,6 +547,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rotate_produces_new_key() {
+        let store = shroudb_storage::test_util::create_test_store("veil-test").await;
+        let mgr = IndexManager::new(store.clone());
+        mgr.init().await.unwrap();
+
+        let original = mgr.create("rotate-test").await.unwrap();
+        let original_key = original.key_material.clone();
+
+        // Put some entries
+        let ns = tokens_namespace("rotate-test");
+        store
+            .put(&ns, b"entry-1", b"{\"words\":[],\"trigrams\":[]}", None)
+            .await
+            .unwrap();
+        store
+            .put(&ns, b"entry-2", b"{\"words\":[],\"trigrams\":[]}", None)
+            .await
+            .unwrap();
+        mgr.increment_entry_count("rotate-test");
+        mgr.increment_entry_count("rotate-test");
+        assert_eq!(mgr.entry_count("rotate-test"), 2);
+
+        // Rotate
+        let rotated = mgr.rotate("rotate-test").await.unwrap();
+
+        // New key is different
+        assert_ne!(*rotated.key_material, *original_key);
+        assert_eq!(rotated.name, "rotate-test");
+
+        // Old entries deleted
+        assert_eq!(mgr.entry_count("rotate-test"), 0);
+
+        // Verify entries are gone from store
+        let page = store.list(&ns, None, None, 100).await.unwrap();
+        assert!(page.keys.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rotate_nonexistent_fails() {
+        let store = shroudb_storage::test_util::create_test_store("veil-test").await;
+        let mgr = IndexManager::new(store);
+        mgr.init().await.unwrap();
+
+        let err = mgr.rotate("nope").await.unwrap_err();
+        assert!(matches!(err, VeilError::IndexNotFound(_)));
+    }
+
+    #[tokio::test]
     async fn invalid_names_rejected() {
         let store = shroudb_storage::test_util::create_test_store("veil-test").await;
         let mgr = IndexManager::new(store);
@@ -365,6 +603,76 @@ mod tests {
         assert!(mgr.create("").await.is_err());
         assert!(mgr.create("has spaces").await.is_err());
         assert!(mgr.create("has.dots").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn reindex_clears_entries_preserves_key() {
+        let store = shroudb_storage::test_util::create_test_store("veil-test").await;
+        let mgr = IndexManager::new(store.clone());
+        mgr.init().await.unwrap();
+
+        let original = mgr.create("reindex-test").await.unwrap();
+        let original_key = original.key_material.clone();
+
+        // Put some entries
+        let ns = tokens_namespace("reindex-test");
+        store
+            .put(&ns, b"entry-1", b"{\"words\":[],\"trigrams\":[]}", None)
+            .await
+            .unwrap();
+        store
+            .put(&ns, b"entry-2", b"{\"words\":[],\"trigrams\":[]}", None)
+            .await
+            .unwrap();
+        mgr.increment_entry_count("reindex-test");
+        mgr.increment_entry_count("reindex-test");
+        assert_eq!(mgr.entry_count("reindex-test"), 2);
+
+        // Reindex
+        let (updated, deleted) = mgr.reindex("reindex-test").await.unwrap();
+        assert_eq!(deleted, 2);
+
+        // Same key preserved
+        assert_eq!(*updated.key_material, *original_key);
+        assert_eq!(updated.tokenizer_version, TOKENIZER_VERSION);
+
+        // Entry count reset
+        assert_eq!(mgr.entry_count("reindex-test"), 0);
+
+        // Verify entries are gone from store
+        let page = store.list(&ns, None, None, 100).await.unwrap();
+        assert!(page.keys.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reindex_nonexistent_fails() {
+        let store = shroudb_storage::test_util::create_test_store("veil-test").await;
+        let mgr = IndexManager::new(store);
+        mgr.init().await.unwrap();
+
+        let err = mgr.reindex("nope").await.unwrap_err();
+        assert!(matches!(err, VeilError::IndexNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn create_sets_tokenizer_version() {
+        let store = shroudb_storage::test_util::create_test_store("veil-test").await;
+        let mgr = IndexManager::new(store);
+        mgr.init().await.unwrap();
+
+        let idx = mgr.create("versioned").await.unwrap();
+        assert_eq!(idx.tokenizer_version, TOKENIZER_VERSION);
+    }
+
+    #[tokio::test]
+    async fn rotate_sets_tokenizer_version() {
+        let store = shroudb_storage::test_util::create_test_store("veil-test").await;
+        let mgr = IndexManager::new(store);
+        mgr.init().await.unwrap();
+
+        mgr.create("rotate-ver").await.unwrap();
+        let rotated = mgr.rotate("rotate-ver").await.unwrap();
+        assert_eq!(rotated.tokenizer_version, TOKENIZER_VERSION);
     }
 
     mod fuzz {

@@ -1,3 +1,8 @@
+/// The tokenizer algorithm version. This is the canonical source of truth
+/// for the tokenization contract shared between server and client (blind)
+/// crates. A bump here means all existing blind tokens must be re-indexed.
+pub const TOKENIZER_VERSION: u32 = 1;
+
 /// Generate searchable tokens from plaintext.
 ///
 /// Produces two categories of tokens:

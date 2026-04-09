@@ -12,7 +12,7 @@ use shroudb_crypto::SecretBytes;
 use shroudb_store::Store;
 use shroudb_veil_core::error::VeilError;
 use shroudb_veil_core::matching::MatchMode;
-use shroudb_veil_core::tokenizer;
+use shroudb_veil_core::tokenizer::{self, TOKENIZER_VERSION};
 
 use crate::hmac_ops::{self, BlindTokenSet};
 use crate::index_manager::{IndexManager, tokens_namespace};
@@ -94,6 +94,15 @@ pub struct IndexInfoResult {
     pub name: String,
     pub created_at: u64,
     pub entry_count: u64,
+    pub tokenizer_version: u32,
+}
+
+/// Result from a reindex operation.
+#[derive(Debug)]
+pub struct IndexReindexResult {
+    pub name: String,
+    pub tokenizer_version: u32,
+    pub entries_cleared: u64,
 }
 
 /// The unified Veil engine. Single entry point for all operations.
@@ -178,6 +187,7 @@ impl<S: Store> VeilEngine<S> {
         let mut event = Event::new(
             AuditEngine::Veil,
             operation.to_string(),
+            "index".to_string(),
             resource.to_string(),
             result,
             actor.unwrap_or("anonymous").to_string(),
@@ -202,7 +212,31 @@ impl<S: Store> VeilEngine<S> {
             name: idx.name.clone(),
             created_at: idx.created_at,
             entry_count: 0,
+            tokenizer_version: idx.tokenizer_version,
         })
+    }
+
+    pub async fn index_rotate(&self, name: &str) -> Result<IndexInfoResult, VeilError> {
+        let start = Instant::now();
+        self.check_policy(name, "index_rotate", None).await?;
+        let idx = self.indexes.rotate(name).await?;
+        self.emit_audit_event("INDEX_ROTATE", name, EventResult::Ok, None, start)
+            .await?;
+        Ok(IndexInfoResult {
+            name: idx.name.clone(),
+            created_at: idx.created_at,
+            entry_count: 0,
+            tokenizer_version: idx.tokenizer_version,
+        })
+    }
+
+    pub async fn index_destroy(&self, name: &str) -> Result<u64, VeilError> {
+        let start = Instant::now();
+        self.check_policy(name, "index_destroy", None).await?;
+        let deleted = self.indexes.destroy(name).await?;
+        self.emit_audit_event("INDEX_DESTROY", name, EventResult::Ok, None, start)
+            .await?;
+        Ok(deleted)
     }
 
     pub fn index_list(&self) -> Vec<String> {
@@ -216,12 +250,41 @@ impl<S: Store> VeilEngine<S> {
             name: idx.name.clone(),
             created_at: idx.created_at,
             entry_count: count,
+            tokenizer_version: idx.tokenizer_version,
+        })
+    }
+
+    pub async fn index_reindex(&self, name: &str) -> Result<IndexReindexResult, VeilError> {
+        let start = Instant::now();
+        self.check_policy(name, "index_reindex", None).await?;
+        let (idx, deleted) = self.indexes.reindex(name).await?;
+        self.emit_audit_event("INDEX_REINDEX", name, EventResult::Ok, None, start)
+            .await?;
+        Ok(IndexReindexResult {
+            name: idx.name.clone(),
+            tokenizer_version: idx.tokenizer_version,
+            entries_cleared: deleted,
         })
     }
 
     /// Access the index manager (for seeding from config).
     pub fn index_manager(&self) -> &IndexManager<S> {
         &self.indexes
+    }
+
+    /// Check that the index's tokenizer version matches the current version.
+    /// Returns an error if the index was built with an older tokenizer.
+    fn check_tokenizer_version(
+        &self,
+        index: &shroudb_veil_core::index::BlindIndex,
+    ) -> Result<(), VeilError> {
+        if index.tokenizer_version != TOKENIZER_VERSION {
+            return Err(VeilError::InvalidArgument(format!(
+                "index '{}' uses tokenizer v{} but current is v{}; run INDEX REINDEX to migrate",
+                index.name, index.tokenizer_version, TOKENIZER_VERSION,
+            )));
+        }
+        Ok(())
     }
 
     // ── Tokenize (pure, no storage) ───────────────────────────────
@@ -233,6 +296,7 @@ impl<S: Store> VeilEngine<S> {
         field: Option<&str>,
     ) -> Result<TokenizeResult, VeilError> {
         let idx = self.indexes.get(index_name)?;
+        self.check_tokenizer_version(&idx)?;
         let plaintext = decode_b64(plaintext_b64)?;
         let text = tokenizer::extract_text(&plaintext, field);
         let tokens = tokenizer::tokenize(&text);
@@ -282,6 +346,7 @@ impl<S: Store> VeilEngine<S> {
         } else {
             // Standard mode: tokenize + blind server-side.
             let idx = self.indexes.get(index_name)?;
+            self.check_tokenizer_version(&idx)?;
             let plaintext = decode_b64(data_b64)?;
             let text = tokenizer::extract_text(&plaintext, field);
             let tokens = tokenizer::tokenize(&text);
@@ -459,6 +524,7 @@ impl<S: Store> VeilEngine<S> {
         } else {
             // Standard mode: tokenize + blind server-side.
             let idx = self.indexes.get(index_name)?;
+            self.check_tokenizer_version(&idx)?;
             let key = decode_key(&idx)?;
             let query_tokens = tokenizer::tokenize(query);
             hmac_ops::blind_token_set(&key, &query_tokens)
@@ -1326,5 +1392,234 @@ mod tests {
         let bad = STANDARD.encode(b"not json");
         let err = engine.put("e2ee", "m1", &bad, None, true).await;
         assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn rotate_produces_new_key_and_clears_entries() {
+        let engine = setup().await;
+        engine.index_create("rot-test").await.unwrap();
+
+        // Add entries
+        let data = STANDARD.encode("hello world");
+        engine
+            .put("rot-test", "e1", &data, None, false)
+            .await
+            .unwrap();
+        engine
+            .put("rot-test", "e2", &data, None, false)
+            .await
+            .unwrap();
+
+        // Search finds them
+        let result = engine
+            .search("rot-test", "hello", MatchMode::Exact, None, None, false)
+            .await
+            .unwrap();
+        assert_eq!(result.matched, 2);
+
+        // Rotate
+        let info = engine.index_rotate("rot-test").await.unwrap();
+        assert_eq!(info.entry_count, 0);
+
+        // Old tokens are gone — search returns nothing
+        let result = engine
+            .search("rot-test", "hello", MatchMode::Exact, None, None, false)
+            .await
+            .unwrap();
+        assert_eq!(result.matched, 0);
+
+        // Re-index with new key works
+        engine
+            .put("rot-test", "e1", &data, None, false)
+            .await
+            .unwrap();
+        let result = engine
+            .search("rot-test", "hello", MatchMode::Exact, None, None, false)
+            .await
+            .unwrap();
+        assert_eq!(result.matched, 1);
+    }
+
+    #[tokio::test]
+    async fn destroy_removes_index_and_entries() {
+        let engine = setup().await;
+        engine.index_create("destroy-test").await.unwrap();
+
+        // Add entries
+        let data = STANDARD.encode("hello world");
+        engine
+            .put("destroy-test", "e1", &data, None, false)
+            .await
+            .unwrap();
+        engine
+            .put("destroy-test", "e2", &data, None, false)
+            .await
+            .unwrap();
+
+        // Destroy
+        let deleted = engine.index_destroy("destroy-test").await.unwrap();
+        assert_eq!(deleted, 2);
+
+        // Index no longer exists — PUT should fail
+        let err = engine.put("destroy-test", "e3", &data, None, false).await;
+        assert!(err.is_err(), "PUT to destroyed index should fail");
+
+        // SEARCH should fail
+        let err = engine
+            .search("destroy-test", "hello", MatchMode::Exact, None, None, false)
+            .await;
+        assert!(err.is_err(), "SEARCH on destroyed index should fail");
+
+        // INDEX INFO should fail
+        let err = engine.index_info("destroy-test").await;
+        assert!(err.is_err(), "INFO on destroyed index should fail");
+
+        // Index not in list
+        let list = engine.index_list();
+        assert!(
+            !list.contains(&"destroy-test".to_string()),
+            "destroyed index should not appear in list"
+        );
+    }
+
+    #[tokio::test]
+    async fn destroy_nonexistent_fails() {
+        let engine = setup().await;
+        let err = engine.index_destroy("nope").await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn destroy_then_recreate() {
+        let engine = setup().await;
+        engine.index_create("reuse-test").await.unwrap();
+
+        let data = STANDARD.encode("original");
+        engine
+            .put("reuse-test", "e1", &data, None, false)
+            .await
+            .unwrap();
+
+        // Destroy
+        engine.index_destroy("reuse-test").await.unwrap();
+
+        // Recreate with fresh key
+        engine.index_create("reuse-test").await.unwrap();
+
+        // Old entries are gone
+        let result = engine
+            .search(
+                "reuse-test",
+                "original",
+                MatchMode::Exact,
+                None,
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result.matched, 0,
+            "old entries should not survive destroy+recreate"
+        );
+
+        // New entries work
+        let data2 = STANDARD.encode("new data");
+        engine
+            .put("reuse-test", "e1", &data2, None, false)
+            .await
+            .unwrap();
+        let result = engine
+            .search("reuse-test", "new", MatchMode::Contains, None, None, false)
+            .await
+            .unwrap();
+        assert_eq!(result.matched, 1);
+    }
+
+    #[tokio::test]
+    async fn reindex_clears_entries_and_preserves_key() {
+        let engine = setup().await;
+        engine.index_create("reindex-test").await.unwrap();
+
+        // Get the original key material for comparison
+        let original_key = engine
+            .indexes
+            .get("reindex-test")
+            .unwrap()
+            .key_material
+            .clone();
+
+        // Add entries
+        let data = STANDARD.encode("hello world");
+        engine
+            .put("reindex-test", "e1", &data, None, false)
+            .await
+            .unwrap();
+        engine
+            .put("reindex-test", "e2", &data, None, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            engine.index_info("reindex-test").await.unwrap().entry_count,
+            2
+        );
+
+        // Reindex
+        let result = engine.index_reindex("reindex-test").await.unwrap();
+        assert_eq!(result.name, "reindex-test");
+        assert_eq!(result.entries_cleared, 2);
+        assert_eq!(result.tokenizer_version, TOKENIZER_VERSION);
+
+        // Entries are cleared
+        assert_eq!(
+            engine.index_info("reindex-test").await.unwrap().entry_count,
+            0
+        );
+
+        // Key is preserved — same key material
+        let after_key = engine
+            .indexes
+            .get("reindex-test")
+            .unwrap()
+            .key_material
+            .clone();
+        assert_eq!(
+            *original_key, *after_key,
+            "key should be preserved after reindex"
+        );
+
+        // Re-add entries with same key and they should be searchable
+        engine
+            .put("reindex-test", "e1", &data, None, false)
+            .await
+            .unwrap();
+        let search = engine
+            .search("reindex-test", "hello", MatchMode::Exact, None, None, false)
+            .await
+            .unwrap();
+        assert_eq!(search.matched, 1);
+    }
+
+    #[tokio::test]
+    async fn reindex_nonexistent_fails() {
+        let engine = setup().await;
+        let err = engine.index_reindex("nope").await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn index_info_includes_tokenizer_version() {
+        let engine = setup().await;
+        engine.index_create("ver-test").await.unwrap();
+
+        let info = engine.index_info("ver-test").await.unwrap();
+        assert_eq!(info.tokenizer_version, TOKENIZER_VERSION);
+    }
+
+    #[tokio::test]
+    async fn index_create_includes_tokenizer_version() {
+        let engine = setup().await;
+        let info = engine.index_create("ver-create").await.unwrap();
+        assert_eq!(info.tokenizer_version, TOKENIZER_VERSION);
     }
 }
