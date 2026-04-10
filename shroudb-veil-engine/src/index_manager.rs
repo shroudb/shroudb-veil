@@ -14,7 +14,7 @@ use shroudb_veil_core::index::BlindIndex;
 
 use shroudb_veil_core::tokenizer::TOKENIZER_VERSION;
 
-use crate::hmac_ops;
+use crate::hmac_ops::{self, BlindTokenSet};
 
 const INDEXES_NAMESPACE: &str = "veil.indexes";
 
@@ -77,6 +77,20 @@ impl<S: Store> IndexManager<S> {
             tracing::info!(count, "loaded blind indexes from store");
         }
 
+        // Ensure inverted index namespaces exist for each loaded index.
+        for entry in self.cache.iter() {
+            let inv_ns = inv_namespace(entry.key());
+            match self
+                .store
+                .namespace_create(&inv_ns, shroudb_store::NamespaceConfig::default())
+                .await
+            {
+                Ok(()) => {}
+                Err(shroudb_store::StoreError::NamespaceExists(_)) => {}
+                Err(e) => return Err(VeilError::Store(e.to_string())),
+            }
+        }
+
         // Initialize entry counts for each loaded index by scanning token namespaces.
         for entry in self.cache.iter() {
             let name = entry.key();
@@ -125,6 +139,18 @@ impl<S: Store> IndexManager<S> {
         match self
             .store
             .namespace_create(&tokens_ns, shroudb_store::NamespaceConfig::default())
+            .await
+        {
+            Ok(()) => {}
+            Err(shroudb_store::StoreError::NamespaceExists(_)) => {}
+            Err(e) => return Err(VeilError::Store(e.to_string())),
+        }
+
+        // Create the inverted index namespace for this index
+        let inv_ns = inv_namespace(name);
+        match self
+            .store
+            .namespace_create(&inv_ns, shroudb_store::NamespaceConfig::default())
             .await
         {
             Ok(()) => {}
@@ -212,6 +238,33 @@ impl<S: Store> IndexManager<S> {
             }
         }
 
+        // Delete all entries in the inverted index namespace
+        let inv_ns = inv_namespace(name);
+        let mut inv_cursor = None;
+        loop {
+            let page = self
+                .store
+                .list(&inv_ns, None, inv_cursor.as_deref(), 100)
+                .await
+                .map_err(|e| VeilError::Store(e.to_string()))?;
+
+            if page.keys.is_empty() {
+                break;
+            }
+
+            for key in &page.keys {
+                self.store
+                    .delete(&inv_ns, key)
+                    .await
+                    .map_err(|e| VeilError::Store(e.to_string()))?;
+            }
+
+            inv_cursor = page.cursor;
+            if inv_cursor.is_none() {
+                break;
+            }
+        }
+
         // Persist updated index
         self.save(&updated).await?;
         let updated = Arc::new(updated);
@@ -263,6 +316,33 @@ impl<S: Store> IndexManager<S> {
 
             cursor = page.cursor;
             if cursor.is_none() {
+                break;
+            }
+        }
+
+        // Delete all entries in the inverted index namespace
+        let inv_ns = inv_namespace(name);
+        let mut inv_cursor = None;
+        loop {
+            let page = self
+                .store
+                .list(&inv_ns, None, inv_cursor.as_deref(), 100)
+                .await
+                .map_err(|e| VeilError::Store(e.to_string()))?;
+
+            if page.keys.is_empty() {
+                break;
+            }
+
+            for key in &page.keys {
+                self.store
+                    .delete(&inv_ns, key)
+                    .await
+                    .map_err(|e| VeilError::Store(e.to_string()))?;
+            }
+
+            inv_cursor = page.cursor;
+            if inv_cursor.is_none() {
                 break;
             }
         }
@@ -324,6 +404,33 @@ impl<S: Store> IndexManager<S> {
 
             cursor = page.cursor;
             if cursor.is_none() {
+                break;
+            }
+        }
+
+        // Delete all entries in the inverted index namespace
+        let inv_ns = inv_namespace(name);
+        let mut inv_cursor = None;
+        loop {
+            let page = self
+                .store
+                .list(&inv_ns, None, inv_cursor.as_deref(), 100)
+                .await
+                .map_err(|e| VeilError::Store(e.to_string()))?;
+
+            if page.keys.is_empty() {
+                break;
+            }
+
+            for key in &page.keys {
+                self.store
+                    .delete(&inv_ns, key)
+                    .await
+                    .map_err(|e| VeilError::Store(e.to_string()))?;
+            }
+
+            inv_cursor = page.cursor;
+            if inv_cursor.is_none() {
                 break;
             }
         }
@@ -396,6 +503,72 @@ impl<S: Store> IndexManager<S> {
         }
     }
 
+    /// Add an entry's tokens to the inverted index.
+    pub async fn inv_add(
+        &self,
+        index_name: &str,
+        entry_id: &str,
+        tokens: &BlindTokenSet,
+    ) -> Result<(), VeilError> {
+        let ns = inv_namespace(index_name);
+        for token in tokens.words.iter().chain(tokens.trigrams.iter()) {
+            let mut ids = self.inv_load_posting(&ns, token).await;
+            if !ids.contains(&entry_id.to_string()) {
+                ids.push(entry_id.to_string());
+                self.inv_save_posting(&ns, token, &ids).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove an entry's tokens from the inverted index.
+    pub async fn inv_remove(
+        &self,
+        index_name: &str,
+        entry_id: &str,
+        tokens: &BlindTokenSet,
+    ) -> Result<(), VeilError> {
+        let ns = inv_namespace(index_name);
+        for token in tokens.words.iter().chain(tokens.trigrams.iter()) {
+            let mut ids = self.inv_load_posting(&ns, token).await;
+            ids.retain(|id| id != entry_id);
+            if ids.is_empty() {
+                let _ = self.store.delete(&ns, token.as_bytes()).await;
+            } else {
+                self.inv_save_posting(&ns, token, &ids).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Look up entry IDs that contain the given token.
+    pub async fn inv_lookup(&self, index_name: &str, token: &str) -> Vec<String> {
+        let ns = inv_namespace(index_name);
+        self.inv_load_posting(&ns, token).await
+    }
+
+    async fn inv_load_posting(&self, ns: &str, token: &str) -> Vec<String> {
+        match self.store.get(ns, token.as_bytes(), None).await {
+            Ok(entry) => serde_json::from_slice(&entry.value).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    async fn inv_save_posting(
+        &self,
+        ns: &str,
+        token: &str,
+        ids: &[String],
+    ) -> Result<(), VeilError> {
+        let value = serde_json::to_vec(ids)
+            .map_err(|e| VeilError::Internal(format!("serialize posting list: {e}")))?;
+        self.store
+            .put(ns, token.as_bytes(), &value, None)
+            .await
+            .map_err(|e| VeilError::Store(e.to_string()))?;
+        Ok(())
+    }
+
     /// Persist an index to the Store.
     async fn save(&self, index: &BlindIndex) -> Result<(), VeilError> {
         let value = serde_json::to_vec(index)
@@ -411,6 +584,11 @@ impl<S: Store> IndexManager<S> {
 /// Build the namespace name for token storage within an index.
 pub fn tokens_namespace(index_name: &str) -> String {
     format!("veil.{index_name}")
+}
+
+/// Build the namespace name for the inverted index within an index.
+pub fn inv_namespace(index_name: &str) -> String {
+    format!("veil.{index_name}.inv")
 }
 
 fn validate_index_name(name: &str) -> Result<(), VeilError> {

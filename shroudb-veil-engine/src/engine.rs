@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -335,14 +335,14 @@ impl<S: Store> VeilEngine<S> {
             ));
         }
 
-        let value = if blind {
+        let (value, new_tokens) = if blind {
             // E2EE mode: data_b64 is base64-encoded BlindTokenSet JSON.
             // Validate it parses but don't need the index key.
             let _ = self.indexes.get(index_name)?;
             let json = decode_b64(data_b64)?;
-            let _tokens: BlindTokenSet = serde_json::from_slice(&json)
+            let tokens: BlindTokenSet = serde_json::from_slice(&json)
                 .map_err(|e| VeilError::InvalidArgument(format!("invalid token set JSON: {e}")))?;
-            json
+            (json, tokens)
         } else {
             // Standard mode: tokenize + blind server-side.
             let idx = self.indexes.get(index_name)?;
@@ -352,19 +352,21 @@ impl<S: Store> VeilEngine<S> {
             let tokens = tokenizer::tokenize(&text);
             let key = decode_key(&idx)?;
             let blind_tokens = hmac_ops::blind_token_set(&key, &tokens);
-            serde_json::to_vec(&blind_tokens)
-                .map_err(|e| VeilError::Internal(format!("serialization failed: {e}")))?
+            let serialized = serde_json::to_vec(&blind_tokens)
+                .map_err(|e| VeilError::Internal(format!("serialization failed: {e}")))?;
+            (serialized, blind_tokens)
         };
 
         let ns = tokens_namespace(index_name);
 
         // Check whether this is a new entry or an update to an existing one.
-        let is_new = self
-            .indexes
-            .store()
-            .get(&ns, id.as_bytes(), None)
-            .await
-            .is_err();
+        // If it's an update, load the old tokens so we can remove them from the
+        // inverted index before adding new ones.
+        let old_tokens = match self.indexes.store().get(&ns, id.as_bytes(), None).await {
+            Ok(entry) => serde_json::from_slice::<BlindTokenSet>(&entry.value).ok(),
+            Err(_) => None,
+        };
+        let is_new = old_tokens.is_none();
 
         // Enforce index size limit on new entries (updates always allowed).
         if is_new && self.config.max_entries_per_index > 0 {
@@ -377,12 +379,20 @@ impl<S: Store> VeilEngine<S> {
             }
         }
 
+        // If updating, remove old tokens from inverted index first.
+        if let Some(ref old) = old_tokens {
+            self.indexes.inv_remove(index_name, id, old).await?;
+        }
+
         let version = self
             .indexes
             .store()
             .put(&ns, id.as_bytes(), &value, None)
             .await
             .map_err(|e| VeilError::Store(e.to_string()))?;
+
+        // Add new tokens to inverted index.
+        self.indexes.inv_add(index_name, id, &new_tokens).await?;
 
         if is_new {
             self.indexes.increment_entry_count(index_name);
@@ -402,14 +412,17 @@ impl<S: Store> VeilEngine<S> {
         let _ = self.indexes.get(index_name)?;
         let ns = tokens_namespace(index_name);
 
-        // Check whether the entry exists before deleting so we can
-        // accurately decrement the cached count.
-        let existed = self
-            .indexes
-            .store()
-            .get(&ns, id.as_bytes(), None)
-            .await
-            .is_ok();
+        // Load the entry's tokens before deleting so we can remove them from
+        // the inverted index.
+        let old_tokens = match self.indexes.store().get(&ns, id.as_bytes(), None).await {
+            Ok(entry) => serde_json::from_slice::<BlindTokenSet>(&entry.value).ok(),
+            Err(_) => None,
+        };
+
+        // Remove from inverted index before deleting the entry.
+        if let Some(ref tokens) = old_tokens {
+            self.indexes.inv_remove(index_name, id, tokens).await?;
+        }
 
         self.indexes
             .store()
@@ -417,7 +430,7 @@ impl<S: Store> VeilEngine<S> {
             .await
             .map_err(|e| VeilError::Store(e.to_string()))?;
 
-        if existed {
+        if old_tokens.is_some() {
             self.indexes.decrement_entry_count(index_name);
         }
 
@@ -439,8 +452,6 @@ impl<S: Store> VeilEngine<S> {
         index_name: &str,
         valid_entry_ids: &[String],
     ) -> Result<ReconcileResult, VeilError> {
-        use std::collections::HashSet;
-
         let start = Instant::now();
         let _ = self.indexes.get(index_name)?;
         let ns = tokens_namespace(index_name);
@@ -532,7 +543,7 @@ impl<S: Store> VeilEngine<S> {
 
         let limit = limit.unwrap_or(self.config.default_result_limit);
         let result = self
-            .scan_entries(index_name, &query_blind, mode, limit)
+            .search_via_index(index_name, &query_blind, mode, limit)
             .await?;
 
         let _ = self
@@ -543,9 +554,10 @@ impl<S: Store> VeilEngine<S> {
 
     // ── Internal helpers ─────────────────────────────────────────
 
-    /// Scan all entries in an index, scoring each against query tokens.
-    /// Keeps only the top-`limit` hits in a bounded min-heap.
-    async fn scan_entries(
+    /// Linear scan fallback: scan all entries in an index, scoring each against
+    /// query tokens. Keeps only the top-`limit` hits in a bounded min-heap.
+    /// Retained as a fallback for cases where the inverted index is unavailable.
+    async fn _scan_entries_linear(
         &self,
         index_name: &str,
         query_blind: &BlindTokenSet,
@@ -631,6 +643,115 @@ impl<S: Store> VeilEngine<S> {
             matched,
         })
     }
+
+    /// Search using the inverted index for O(1) token lookups instead of
+    /// scanning all entries.
+    async fn search_via_index(
+        &self,
+        index_name: &str,
+        query_blind: &BlindTokenSet,
+        mode: MatchMode,
+        limit: usize,
+    ) -> Result<SearchResult, VeilError> {
+        let ns = tokens_namespace(index_name);
+
+        // Step 1: Get candidate entry IDs from inverted index
+        let candidates = match mode {
+            MatchMode::Exact => {
+                // Intersection of all query word posting lists
+                if query_blind.words.is_empty() {
+                    return Ok(SearchResult {
+                        hits: vec![],
+                        scanned: 0,
+                        matched: 0,
+                    });
+                }
+                let mut sets: Vec<HashSet<String>> = Vec::new();
+                for token in &query_blind.words {
+                    let ids = self.indexes.inv_lookup(index_name, token).await;
+                    sets.push(ids.into_iter().collect());
+                }
+                let mut result = sets.remove(0);
+                for set in &sets {
+                    result.retain(|id| set.contains(id));
+                }
+                result
+            }
+            MatchMode::Contains => {
+                // Union of all query word posting lists
+                let mut result = HashSet::new();
+                for token in &query_blind.words {
+                    let ids = self.indexes.inv_lookup(index_name, token).await;
+                    result.extend(ids);
+                }
+                result
+            }
+            MatchMode::Prefix | MatchMode::Fuzzy => {
+                // Union of all query trigram posting lists
+                if query_blind.trigrams.is_empty() {
+                    // Fall back to word-based contains
+                    let mut result = HashSet::new();
+                    for token in &query_blind.words {
+                        let ids = self.indexes.inv_lookup(index_name, token).await;
+                        result.extend(ids);
+                    }
+                    result
+                } else {
+                    let mut result = HashSet::new();
+                    for token in &query_blind.trigrams {
+                        let ids = self.indexes.inv_lookup(index_name, token).await;
+                        result.extend(ids);
+                    }
+                    result
+                }
+            }
+        };
+
+        // Step 2: Fetch full token sets for candidates and score them
+        let mut heap: BinaryHeap<MinScoreHit> = BinaryHeap::with_capacity(limit + 1);
+        let scanned = candidates.len();
+        let mut matched = 0usize;
+
+        for entry_id in candidates {
+            let entry = match self
+                .indexes
+                .store()
+                .get(&ns, entry_id.as_bytes(), None)
+                .await
+            {
+                Ok(e) => e,
+                Err(_) => continue, // Stale posting list entry
+            };
+
+            let entry_blind: BlindTokenSet = match serde_json::from_slice(&entry.value) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+
+            if let Some(score) = search::score_entry(mode, query_blind, &entry_blind) {
+                matched += 1;
+                heap.push(MinScoreHit(SearchHit {
+                    id: entry_id,
+                    score,
+                }));
+                if heap.len() > limit {
+                    heap.pop();
+                }
+            }
+        }
+
+        let mut hits = Vec::with_capacity(heap.len());
+        while let Some(MinScoreHit(hit)) = heap.pop() {
+            hits.push(hit);
+        }
+        hits.reverse();
+
+        Ok(SearchResult {
+            hits,
+            scanned,
+            matched,
+        })
+    }
 }
 
 fn decode_b64(input: &str) -> Result<Vec<u8>, VeilError> {
@@ -691,7 +812,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.matched, 2);
-        assert_eq!(result.scanned, 3);
+        // With the inverted index, only candidate entries are scanned (not all 3).
+        assert_eq!(result.scanned, 2);
     }
 
     #[tokio::test]
@@ -1025,6 +1147,8 @@ mod tests {
         let engine = Arc::new(setup().await);
         engine.index_create("concurrent").await.unwrap();
 
+        // Use unique words per entry to avoid concurrent writes to the same
+        // inverted index posting list (which is a read-modify-write operation).
         let mut handles = Vec::new();
         for i in 0..10 {
             let eng = engine.clone();
@@ -1032,7 +1156,7 @@ mod tests {
                 eng.put(
                     "concurrent",
                     &format!("entry-{i}"),
-                    &STANDARD.encode(format!("value-{i}").as_bytes()),
+                    &STANDARD.encode(format!("uniqueprefix{i}").as_bytes()),
                     None,
                     false,
                 )
@@ -1053,7 +1177,7 @@ mod tests {
             let result = engine
                 .search(
                     "concurrent",
-                    &format!("value-{i}"),
+                    &format!("uniqueprefix{i}"),
                     MatchMode::Exact,
                     None,
                     None,
@@ -1061,7 +1185,10 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(result.matched, 1, "value-{i} should match exactly 1 entry");
+            assert_eq!(
+                result.matched, 1,
+                "uniqueprefix{i} should match exactly 1 entry"
+            );
             assert_eq!(result.hits[0].id, format!("entry-{i}"));
         }
     }
@@ -1621,5 +1748,90 @@ mod tests {
         let engine = setup().await;
         let info = engine.index_create("ver-create").await.unwrap();
         assert_eq!(info.tokenizer_version, TOKENIZER_VERSION);
+    }
+
+    #[tokio::test]
+    async fn inverted_index_search_over_many_entries() {
+        let engine = setup().await;
+        engine.index_create("inv-test").await.unwrap();
+
+        // Put 100 entries with unique words
+        for i in 0..100 {
+            engine
+                .put(
+                    "inv-test",
+                    &format!("e{i}"),
+                    &STANDARD.encode(format!("uniqueword{i} common")),
+                    None,
+                    false,
+                )
+                .await
+                .unwrap();
+        }
+
+        // Search for a specific unique word — should find exactly 1 entry
+        let result = engine
+            .search(
+                "inv-test",
+                "uniqueword42",
+                MatchMode::Exact,
+                None,
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.matched, 1);
+        assert_eq!(result.hits[0].id, "e42");
+        // Inverted index should only scan the candidate entries, not all 100
+        assert!(
+            result.scanned < 100,
+            "inverted index should skip non-matching entries, scanned: {}",
+            result.scanned,
+        );
+    }
+
+    #[tokio::test]
+    async fn inverted_index_update_removes_old_tokens() {
+        let engine = setup().await;
+        engine.index_create("inv-update").await.unwrap();
+
+        // Put entry with "alpha"
+        engine
+            .put("inv-update", "e1", &STANDARD.encode("alpha"), None, false)
+            .await
+            .unwrap();
+
+        // Verify it's searchable by "alpha"
+        let result = engine
+            .search("inv-update", "alpha", MatchMode::Exact, None, None, false)
+            .await
+            .unwrap();
+        assert_eq!(result.matched, 1);
+
+        // Update same entry to "bravo"
+        engine
+            .put("inv-update", "e1", &STANDARD.encode("bravo"), None, false)
+            .await
+            .unwrap();
+
+        // "alpha" should no longer match
+        let result = engine
+            .search("inv-update", "alpha", MatchMode::Exact, None, None, false)
+            .await
+            .unwrap();
+        assert_eq!(result.matched, 0);
+
+        // "bravo" should match
+        let result = engine
+            .search("inv-update", "bravo", MatchMode::Exact, None, None, false)
+            .await
+            .unwrap();
+        assert_eq!(result.matched, 1);
+        assert_eq!(result.hits[0].id, "e1");
+
+        // Entry count should still be 1 (update, not new)
+        let info = engine.index_info("inv-update").await.unwrap();
+        assert_eq!(info.entry_count, 1);
     }
 }

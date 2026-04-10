@@ -60,7 +60,8 @@ async fn tcp_full_blind_index_lifecycle() {
         .search("users", "johnson", Some("exact"), None, None, false)
         .await
         .expect("search failed");
-    assert_eq!(result.scanned, 3);
+    // With the inverted index, only candidate entries are scanned (not all 3).
+    assert_eq!(result.scanned, 2);
     assert_eq!(result.matched, 2);
     let ids: Vec<&str> = result.results.iter().map(|h| h.id.as_str()).collect();
     assert!(ids.contains(&"u1"));
