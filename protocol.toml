@@ -1,8 +1,97 @@
 [protocol]
 name = "veil"
-version = "1.0.0"
+version = "1.1.0"
 default_tcp_port = 6799
 uri_scheme = "shroudb-veil"
+
+# ── HTTP API ────────────────────────────────────────────────────────
+# Optional HTTP interface (Axum). Enabled via `server.http_bind` config
+# or `--http-bind` / `VEIL_HTTP_BIND` env var.
+
+[http]
+description = "REST-style HTTP API for non-Rust integrations"
+
+[http.endpoints.index_create]
+method = "POST"
+path = "/index/create"
+body = { fields = ["name"] }
+acl = "admin"
+maps_to = "INDEX CREATE"
+
+[http.endpoints.index_destroy]
+method = "POST"
+path = "/index/destroy"
+body = { fields = ["name"] }
+acl = "admin"
+maps_to = "INDEX DESTROY"
+
+[http.endpoints.index_rotate]
+method = "POST"
+path = "/index/rotate"
+body = { fields = ["name"] }
+acl = "admin"
+maps_to = "INDEX ROTATE"
+
+[http.endpoints.index_reindex]
+method = "POST"
+path = "/index/reindex"
+body = { fields = ["name"] }
+acl = "admin"
+maps_to = "INDEX REINDEX"
+
+[http.endpoints.index_reconcile]
+method = "POST"
+path = "/index/reconcile"
+body = { fields = ["name", "valid_ids"] }
+acl = "admin"
+maps_to = "INDEX RECONCILE"
+
+[http.endpoints.index_info]
+method = "GET"
+path = "/index/info"
+query = { fields = ["name"] }
+acl = "namespace:read"
+maps_to = "INDEX INFO"
+
+[http.endpoints.index_list]
+method = "GET"
+path = "/index/list"
+acl = "none"
+maps_to = "INDEX LIST"
+
+[http.endpoints.put]
+method = "POST"
+path = "/put"
+body = { fields = ["index", "entry_id", "data", "field?", "blind?"] }
+acl = "namespace:write"
+maps_to = "PUT"
+
+[http.endpoints.delete]
+method = "DELETE"
+path = "/entry"
+query = { fields = ["index", "entry_id"] }
+acl = "namespace:write"
+maps_to = "DELETE"
+
+[http.endpoints.search]
+method = "GET"
+path = "/search"
+query = { fields = ["index", "query", "mode?", "field?", "limit?", "blind?"] }
+acl = "namespace:read"
+maps_to = "SEARCH"
+
+[http.endpoints.tokenize]
+method = "POST"
+path = "/tokenize"
+body = { fields = ["index", "data", "field?"] }
+acl = "namespace:read"
+maps_to = "TOKENIZE"
+
+[http.endpoints.health]
+method = "GET"
+path = "/health"
+acl = "none"
+maps_to = "HEALTH"
 
 [errors]
 DENIED = { http = 401, description = "Authentication or authorization failure" }

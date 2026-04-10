@@ -1,4 +1,5 @@
 mod config;
+mod http;
 mod tcp;
 
 use std::sync::Arc;
@@ -23,6 +24,10 @@ struct Cli {
     /// TCP bind address (overrides config).
     #[arg(long, env = "VEIL_TCP_BIND")]
     tcp_bind: Option<String>,
+
+    /// HTTP bind address (overrides config).
+    #[arg(long, env = "VEIL_HTTP_BIND")]
+    http_bind: Option<String>,
 
     /// Log level.
     #[arg(long, env = "VEIL_LOG_LEVEL", default_value = "info")]
@@ -55,6 +60,9 @@ async fn main() -> anyhow::Result<()> {
     }
     if let Some(ref bind) = cli.tcp_bind {
         cfg.server.tcp_bind = bind.parse().context("invalid TCP bind address")?;
+    }
+    if let Some(ref bind) = cli.http_bind {
+        cfg.server.http_bind = Some(bind.clone());
     }
 
     // Store mode validation
@@ -127,6 +135,21 @@ async fn main() -> anyhow::Result<()> {
         .await;
     });
 
+    // HTTP server (optional)
+    let http_handle = if let Some(ref http_bind) = cfg.server.http_bind {
+        let http_listener = tokio::net::TcpListener::bind(http_bind)
+            .await
+            .context("failed to bind HTTP listener")?;
+        let http_router = http::router(engine.clone(), token_validator);
+        Some(tokio::spawn(async move {
+            axum::serve(http_listener, http_router)
+                .await
+                .unwrap_or_else(|e| tracing::error!(error = %e, "HTTP server error"));
+        }))
+    } else {
+        None
+    };
+
     // Banner
     shroudb_server_bootstrap::print_banner(
         "Veil",
@@ -134,10 +157,16 @@ async fn main() -> anyhow::Result<()> {
         &cfg.server.tcp_bind.to_string(),
         &cfg.store.data_dir,
     );
+    if let Some(ref http_bind) = cfg.server.http_bind {
+        eprintln!("\u{251c}\u{2500} http:    {http_bind}");
+    }
 
     // Wait for shutdown
     shroudb_server_bootstrap::wait_for_shutdown(shutdown_tx).await?;
     let _ = tcp_handle.await;
+    if let Some(h) = http_handle {
+        h.abort();
+    }
 
     Ok(())
 }
