@@ -1,21 +1,23 @@
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use shroudb_acl::{AclRequirement, AuthContext, TokenValidator};
 use shroudb_protocol_wire::Resp3Frame;
 use shroudb_server_tcp::ServerProtocol;
+use shroudb_store::Store;
 use shroudb_veil_engine::engine::VeilEngine;
 use shroudb_veil_protocol::commands::{VeilCommand, parse_command};
 use shroudb_veil_protocol::dispatch::dispatch;
 use shroudb_veil_protocol::response::VeilResponse;
 
-pub struct VeilProtocol;
+pub struct VeilProtocol<S>(PhantomData<S>);
 
-impl ServerProtocol for VeilProtocol {
+impl<S: Store + 'static> ServerProtocol for VeilProtocol<S> {
     type Command = VeilCommand;
     type Response = VeilResponse;
-    type Engine = VeilEngine<shroudb_storage::EmbeddedStore>;
+    type Engine = VeilEngine<S>;
 
     fn engine_name(&self) -> &str {
         "veil"
@@ -65,9 +67,9 @@ impl ServerProtocol for VeilProtocol {
     }
 }
 
-pub async fn run_tcp(
+pub async fn run_tcp<S: Store + 'static>(
     listener: tokio::net::TcpListener,
-    engine: Arc<VeilEngine<shroudb_storage::EmbeddedStore>>,
+    engine: Arc<VeilEngine<S>>,
     token_validator: Option<Arc<dyn TokenValidator>>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
     tls_acceptor: Option<tokio_rustls::TlsAcceptor>,
@@ -75,7 +77,7 @@ pub async fn run_tcp(
     shroudb_server_tcp::run_tcp_tls(
         listener,
         engine,
-        Arc::new(VeilProtocol),
+        Arc::new(VeilProtocol::<S>(PhantomData)),
         token_validator,
         shutdown_rx,
         tls_acceptor,

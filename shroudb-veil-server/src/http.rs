@@ -10,22 +10,30 @@ use serde_json::json;
 use tower_http::cors::{Any, CorsLayer};
 
 use shroudb_acl::{AclRequirement, AuthContext, Scope, TokenValidator};
-use shroudb_storage::EmbeddedStore;
+use shroudb_store::Store;
 use shroudb_veil_core::matching::MatchMode;
 use shroudb_veil_engine::engine::VeilEngine;
 
 // -- State ------------------------------------------------------------------
 
-#[derive(Clone)]
-struct AppState {
-    engine: Arc<VeilEngine<EmbeddedStore>>,
+struct AppState<S: Store> {
+    engine: Arc<VeilEngine<S>>,
     token_validator: Option<Arc<dyn TokenValidator>>,
+}
+
+impl<S: Store> Clone for AppState<S> {
+    fn clone(&self) -> Self {
+        Self {
+            engine: self.engine.clone(),
+            token_validator: self.token_validator.clone(),
+        }
+    }
 }
 
 // -- Router -----------------------------------------------------------------
 
-pub fn router(
-    engine: Arc<VeilEngine<EmbeddedStore>>,
+pub fn router<S: Store + 'static>(
+    engine: Arc<VeilEngine<S>>,
     token_validator: Option<Arc<dyn TokenValidator>>,
 ) -> Router {
     let state = AppState {
@@ -34,18 +42,18 @@ pub fn router(
     };
 
     Router::new()
-        .route("/index/create", post(index_create))
-        .route("/index/destroy", post(index_destroy))
-        .route("/index/rotate", post(index_rotate))
-        .route("/index/reindex", post(index_reindex))
-        .route("/index/reconcile", post(index_reconcile))
-        .route("/index/info", get(index_info))
-        .route("/index/list", get(index_list))
-        .route("/put", post(put))
-        .route("/entry", delete(delete_entry))
-        .route("/search", get(search))
-        .route("/tokenize", post(tokenize))
-        .route("/health", get(health))
+        .route("/index/create", post(index_create::<S>))
+        .route("/index/destroy", post(index_destroy::<S>))
+        .route("/index/rotate", post(index_rotate::<S>))
+        .route("/index/reindex", post(index_reindex::<S>))
+        .route("/index/reconcile", post(index_reconcile::<S>))
+        .route("/index/info", get(index_info::<S>))
+        .route("/index/list", get(index_list::<S>))
+        .route("/put", post(put::<S>))
+        .route("/entry", delete(delete_entry::<S>))
+        .route("/search", get(search::<S>))
+        .route("/tokenize", post(tokenize::<S>))
+        .route("/health", get(health::<S>))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -57,8 +65,8 @@ pub fn router(
 
 // -- Auth -------------------------------------------------------------------
 
-fn extract_auth_context(
-    state: &AppState,
+fn extract_auth_context<S: Store>(
+    state: &AppState<S>,
     headers: &HeaderMap,
 ) -> Result<Option<AuthContext>, Box<Response>> {
     let Some(ref validator) = state.token_validator else {
@@ -85,8 +93,8 @@ fn extract_auth_context(
     }
 }
 
-fn require_auth(
-    state: &AppState,
+fn require_auth<S: Store>(
+    state: &AppState<S>,
     headers: &HeaderMap,
     acl: &AclRequirement,
 ) -> Result<Option<AuthContext>, Box<Response>> {
@@ -185,8 +193,8 @@ struct ReconcileBody {
 
 // -- Handlers ---------------------------------------------------------------
 
-async fn index_create(
-    State(state): State<AppState>,
+async fn index_create<S: Store + 'static>(
+    State(state): State<AppState<S>>,
     headers: HeaderMap,
     Json(body): Json<NameParam>,
 ) -> Response {
@@ -210,8 +218,8 @@ async fn index_create(
     }
 }
 
-async fn index_destroy(
-    State(state): State<AppState>,
+async fn index_destroy<S: Store + 'static>(
+    State(state): State<AppState<S>>,
     headers: HeaderMap,
     Json(body): Json<NameParam>,
 ) -> Response {
@@ -234,8 +242,8 @@ async fn index_destroy(
     }
 }
 
-async fn index_rotate(
-    State(state): State<AppState>,
+async fn index_rotate<S: Store + 'static>(
+    State(state): State<AppState<S>>,
     headers: HeaderMap,
     Json(body): Json<NameParam>,
 ) -> Response {
@@ -259,8 +267,8 @@ async fn index_rotate(
     }
 }
 
-async fn index_reindex(
-    State(state): State<AppState>,
+async fn index_reindex<S: Store + 'static>(
+    State(state): State<AppState<S>>,
     headers: HeaderMap,
     Json(body): Json<NameParam>,
 ) -> Response {
@@ -284,8 +292,8 @@ async fn index_reindex(
     }
 }
 
-async fn index_reconcile(
-    State(state): State<AppState>,
+async fn index_reconcile<S: Store + 'static>(
+    State(state): State<AppState<S>>,
     headers: HeaderMap,
     Json(body): Json<ReconcileBody>,
 ) -> Response {
@@ -312,8 +320,8 @@ async fn index_reconcile(
     }
 }
 
-async fn index_info(
-    State(state): State<AppState>,
+async fn index_info<S: Store + 'static>(
+    State(state): State<AppState<S>>,
     headers: HeaderMap,
     Query(params): Query<NameParam>,
 ) -> Response {
@@ -342,13 +350,13 @@ async fn index_info(
     }
 }
 
-async fn index_list(State(state): State<AppState>) -> Response {
+async fn index_list<S: Store + 'static>(State(state): State<AppState<S>>) -> Response {
     let names = state.engine.index_list();
     (StatusCode::OK, Json(json!(names))).into_response()
 }
 
-async fn put(
-    State(state): State<AppState>,
+async fn put<S: Store + 'static>(
+    State(state): State<AppState<S>>,
     headers: HeaderMap,
     Json(body): Json<PutBody>,
 ) -> Response {
@@ -386,8 +394,8 @@ async fn put(
     }
 }
 
-async fn delete_entry(
-    State(state): State<AppState>,
+async fn delete_entry<S: Store + 'static>(
+    State(state): State<AppState<S>>,
     headers: HeaderMap,
     Query(params): Query<DeleteParams>,
 ) -> Response {
@@ -414,8 +422,8 @@ async fn delete_entry(
     }
 }
 
-async fn search(
-    State(state): State<AppState>,
+async fn search<S: Store + 'static>(
+    State(state): State<AppState<S>>,
     headers: HeaderMap,
     Query(params): Query<SearchParams>,
 ) -> Response {
@@ -472,8 +480,8 @@ async fn search(
     }
 }
 
-async fn tokenize(
-    State(state): State<AppState>,
+async fn tokenize<S: Store + 'static>(
+    State(state): State<AppState<S>>,
     headers: HeaderMap,
     Json(body): Json<TokenizeBody>,
 ) -> Response {
@@ -508,7 +516,7 @@ async fn tokenize(
     }
 }
 
-async fn health(State(state): State<AppState>) -> Response {
+async fn health<S: Store + 'static>(State(state): State<AppState<S>>) -> Response {
     let index_count = state.engine.index_list().len();
     (
         StatusCode::OK,
