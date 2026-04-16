@@ -61,7 +61,48 @@ Create a new blind index.
 
 ```
 INDEX CREATE users
-→ {"status":"ok","index":"users","created_at":1711700000}
+→ {"status":"ok","index":"users","created_at":1711700000,"tokenizer_version":1}
+```
+
+#### INDEX ROTATE
+
+Rotate an index's HMAC key. Generates a new key, deletes all existing entries.
+The application must re-index all entries after rotation.
+
+```
+INDEX ROTATE users
+→ {"status":"ok","index":"users","rotated_at":1711700000,"entry_count":0}
+```
+
+#### INDEX DESTROY
+
+Crypto-shred an index: zeroize the HMAC key, delete all entries, and remove the
+index. After destruction, the index name can be reused.
+
+```
+INDEX DESTROY users
+→ {"status":"ok","index":"users","deleted_entries":42}
+```
+
+#### INDEX REINDEX
+
+Clear all entries and update the tokenizer version to current. The HMAC key is
+preserved. After reindex, the application must re-submit all entries via `PUT`.
+Use this when the tokenizer algorithm has been upgraded.
+
+```
+INDEX REINDEX users
+→ {"status":"ok","index":"users","tokenizer_version":1,"entries_cleared":42}
+```
+
+#### INDEX RECONCILE
+
+Remove orphaned entries from the index. Compares stored entry IDs against the
+provided valid set and deletes any entries not in the set.
+
+```
+INDEX RECONCILE users u1 u2 u3
+→ {"status":"ok","index":"users","orphans_removed":2}
 ```
 
 #### INDEX LIST
@@ -79,7 +120,7 @@ Get index metadata.
 
 ```
 INDEX INFO users
-→ {"index":"users","created_at":1711700000,"entry_count":42}
+→ {"index":"users","created_at":1711700000,"entry_count":42,"tokenizer_version":1}
 ```
 
 #### TOKENIZE
@@ -148,6 +189,42 @@ Parameters:
 - `LIMIT` — Maximum results (default: 100)
 - `BLIND` — Client provides pre-computed blind tokens (see E2EE Workflow below)
 
+#### AUTH
+
+Authenticate the current connection with a token.
+
+```
+AUTH <token>
+→ {"status":"ok"}
+```
+
+#### HEALTH
+
+Health check.
+
+```
+HEALTH
+→ {"status":"ok"}
+```
+
+#### PING
+
+Ping-pong.
+
+```
+PING
+→ "PONG"
+```
+
+#### COMMAND LIST
+
+List all supported commands.
+
+```
+COMMAND LIST
+→ {"count":15,"commands":["AUTH","INDEX CREATE", ...]}
+```
+
 ## E2EE Workflow (BLIND Mode)
 
 In the standard workflow, the client sends plaintext to the server, which tokenizes and blinds it. This is secure at rest and during search, but the server sees plaintext during ingestion.
@@ -184,8 +261,8 @@ Veil uses token-based auth via `shroudb-acl`. When `[auth] method = "token"` is 
 4. Each subsequent command is checked against the token's grants
 
 ACL scopes:
-- **Public** (no auth needed): HEALTH, PING, INDEX LIST, COMMAND LIST
-- **Admin**: INDEX CREATE
+- **Public** (no auth needed): HEALTH, PING, INDEX LIST, COMMAND LIST, AUTH
+- **Admin**: INDEX CREATE, INDEX ROTATE, INDEX DESTROY, INDEX REINDEX, INDEX RECONCILE
 - **Namespace Read** (`veil.{index}.*`): SEARCH, TOKENIZE, INDEX INFO
 - **Namespace Write** (`veil.{index}.*`): PUT, DELETE
 

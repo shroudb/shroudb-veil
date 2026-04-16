@@ -22,6 +22,6 @@ Veil is one of ShrouDB's security engines. It solves the encrypted search proble
 
 **End-to-end encryption (E2EE):** In the standard workflow, clients send plaintext to Veil for server-side tokenization and blinding. For environments where plaintext must never leave the client, Veil supports a `BLIND` mode. The client tokenizes and blinds data locally using the `shroudb-veil-blind` crate, then sends the pre-computed blind tokens to the server. The server stores and searches them directly without ever seeing plaintext. This enables true end-to-end encrypted search where the server is a blind intermediary.
 
-**Architecture:** Generic over the ShrouDB Store trait — runs embedded (in-process) or against a remote ShrouDB server. TCP-only (RESP3 wire protocol). No HTTP surface — Veil is machine-to-machine infrastructure.
+**Architecture:** Generic over the ShrouDB Store trait — runs embedded (in-process) or against a remote ShrouDB server. Primary wire protocol is RESP3 over TCP; an optional REST-style HTTP API is available for non-Rust integrations.
 
 **Deployment:** Standalone TCP server, embedded in Moat (ShrouDB's single-binary hub), or as a library in other engines via the VeilOps capability trait.

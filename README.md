@@ -20,8 +20,12 @@ cargo run -p shroudb-veil-cli -- SEARCH users johnson MODE exact
 | Command | Description | ACL |
 |---------|-------------|-----|
 | `INDEX CREATE <name>` | Create a blind index | Admin |
+| `INDEX ROTATE <name>` | Rotate HMAC key; clears all entries | Admin |
+| `INDEX DESTROY <name>` | Crypto-shred key + delete entries + remove index | Admin |
+| `INDEX REINDEX <name>` | Clear entries and update tokenizer version | Admin |
+| `INDEX RECONCILE <name> <id1> [id2 ...]` | Remove orphaned entries not in the valid set | Admin |
 | `INDEX LIST` | List all indexes | Public |
-| `INDEX INFO <name>` | Get index info (entry count, created_at) | Read |
+| `INDEX INFO <name>` | Get index info (entry count, created_at, tokenizer_version) | Read |
 | `TOKENIZE <index> <b64> [FIELD <f>]` | Generate blind tokens without storing | Read |
 | `PUT <index> <id> <b64> [FIELD <f>] [BLIND]` | Tokenize + store blind tokens | Write |
 | `DELETE <index> <id>` | Remove entry from index | Write |
@@ -29,6 +33,7 @@ cargo run -p shroudb-veil-cli -- SEARCH users johnson MODE exact
 | `HEALTH` | Health check | Public |
 | `PING` | Ping-pong | Public |
 | `AUTH <token>` | Authenticate connection | Public |
+| `COMMAND LIST` | List supported commands | Public |
 
 ### Search Modes
 
@@ -97,6 +102,7 @@ grants = [
 | `VEIL_CONFIG` | Path to config file |
 | `VEIL_DATA_DIR` | Data directory |
 | `VEIL_TCP_BIND` | TCP bind address |
+| `VEIL_HTTP_BIND` | HTTP bind address (optional REST API) |
 | `VEIL_LOG_LEVEL` | Log level (info, debug, warn) |
 | `VEIL_ADDR` | CLI: server address (default: 127.0.0.1:6799) |
 | `SHROUDB_MASTER_KEY` | Base64-encoded 32-byte master key |

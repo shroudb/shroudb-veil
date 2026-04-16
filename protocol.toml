@@ -1,5 +1,6 @@
 [protocol]
 name = "veil"
+description = "Searchable encryption with blind indexing"
 version = "1.1.0"
 default_tcp_port = 6799
 uri_scheme = "shroudb-veil"
