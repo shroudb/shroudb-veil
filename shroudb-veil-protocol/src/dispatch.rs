@@ -1,4 +1,5 @@
 use shroudb_acl::AuthContext;
+use shroudb_protocol_wire::WIRE_PROTOCOL;
 use shroudb_store::Store;
 use shroudb_veil_core::matching::MatchMode;
 use shroudb_veil_engine::engine::VeilEngine;
@@ -22,6 +23,7 @@ const SUPPORTED_COMMANDS: &[&str] = &[
     "HEALTH",
     "PING",
     "COMMAND LIST",
+    "HELLO",
 ];
 
 /// Dispatch a parsed command to the VeilEngine and produce a response.
@@ -203,6 +205,14 @@ pub async fn dispatch<S: Store>(
         VeilCommand::CommandList => VeilResponse::ok(serde_json::json!({
             "count": SUPPORTED_COMMANDS.len(),
             "commands": SUPPORTED_COMMANDS,
+        })),
+
+        VeilCommand::Hello => VeilResponse::ok(serde_json::json!({
+            "engine": "veil",
+            "version": env!("CARGO_PKG_VERSION"),
+            "protocol": WIRE_PROTOCOL,
+            "commands": SUPPORTED_COMMANDS,
+            "capabilities": Vec::<&str>::new(),
         })),
     }
 }

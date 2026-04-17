@@ -68,6 +68,11 @@ pub enum VeilCommand {
     Health,
     Ping,
     CommandList,
+    /// Engine identity handshake. Pre-auth; returns engine name, version,
+    /// wire protocol, supported commands, and capability tags so a client
+    /// can detect SDK/engine version mismatches before issuing any real
+    /// command.
+    Hello,
 }
 
 impl VeilCommand {
@@ -78,7 +83,8 @@ impl VeilCommand {
             VeilCommand::Auth { .. }
             | VeilCommand::Health
             | VeilCommand::Ping
-            | VeilCommand::CommandList => AclRequirement::None,
+            | VeilCommand::CommandList
+            | VeilCommand::Hello => AclRequirement::None,
 
             // Listing index names is not sensitive
             VeilCommand::IndexList => AclRequirement::None,
@@ -135,6 +141,7 @@ pub fn parse_command(args: &[&str]) -> Result<VeilCommand, String> {
         "HEALTH" => Ok(VeilCommand::Health),
         "PING" => Ok(VeilCommand::Ping),
         "COMMAND" => Ok(VeilCommand::CommandList),
+        "HELLO" => Ok(VeilCommand::Hello),
         _ => Err(format!("unknown command: {}", args[0])),
     }
 }
@@ -431,6 +438,12 @@ mod tests {
     fn parse_ping() {
         let cmd = parse_command(&["PING"]).unwrap();
         assert!(matches!(cmd, VeilCommand::Ping));
+    }
+
+    #[test]
+    fn parse_hello() {
+        let cmd = parse_command(&["HELLO"]).unwrap();
+        assert!(matches!(cmd, VeilCommand::Hello));
     }
 
     #[test]
