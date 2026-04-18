@@ -122,16 +122,28 @@ tcp_bind = "{tcp_bind}"
 
 [store]
 mode = "embedded"
+
+[audit]
+mode = "disabled"
+justification = "integration test harness"
+
+[policy]
+mode = "disabled"
+justification = "integration test harness"
 "#
     );
 
+    // Tests run without real Chronicle/Sentry wired; relax the enforcing
+    // defaults so the engine accepts the disabled capabilities above. The
+    // engine + dispatch debt tests cover the production fail-closed paths.
+    let mut engine_section = String::from("\n[engine]\n");
+    engine_section.push_str("require_audit = false\n");
+    engine_section.push_str("require_policy = false\n");
     if !config.indexes.is_empty() {
         let index_list: Vec<String> = config.indexes.iter().map(|n| format!("\"{n}\"")).collect();
-        toml.push_str(&format!(
-            "\n[engine]\nindexes = [{}]\n",
-            index_list.join(", ")
-        ));
+        engine_section.push_str(&format!("indexes = [{}]\n", index_list.join(", ")));
     }
+    toml.push_str(&engine_section);
 
     if !config.tokens.is_empty() {
         toml.push_str("\n[auth]\nmethod = \"token\"\n\n");

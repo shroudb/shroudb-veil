@@ -434,6 +434,7 @@ impl<S: Store> VeilEngine<S> {
             let json = decode_b64(data_b64)?;
             let tokens: BlindTokenSet = serde_json::from_slice(&json)
                 .map_err(|e| VeilError::InvalidArgument(format!("invalid token set JSON: {e}")))?;
+            validate_blind_token_set(&tokens)?;
             (json, tokens)
         } else {
             // Standard mode: tokenize + blind server-side.
@@ -869,6 +870,36 @@ fn decode_key(idx: &shroudb_veil_core::index::BlindIndex) -> Result<SecretBytes,
     let bytes = hex::decode(idx.key_material.as_str())
         .map_err(|e| VeilError::Internal(format!("corrupt key material hex: {e}")))?;
     Ok(SecretBytes::new(bytes))
+}
+
+/// Expected length of a hex-encoded SHA-256 HMAC output (32 bytes = 64 hex chars).
+const BLIND_TOKEN_HEX_LEN: usize = 64;
+
+/// Verify that every string in a `BlindTokenSet` is plausibly a SHA-256 HMAC
+/// output: exactly 64 lowercase hex characters. Rejects anything else to stop
+/// E2EE clients (or attackers) from poisoning an index with strings that can
+/// never match a well-formed blind token.
+fn validate_blind_token_set(tokens: &BlindTokenSet) -> Result<(), VeilError> {
+    fn check_token(kind: &str, token: &str) -> Result<(), VeilError> {
+        if token.len() != BLIND_TOKEN_HEX_LEN
+            || !token
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(VeilError::InvalidArgument(format!(
+                "blind token set contains an invalid {kind}: expected \
+                 {BLIND_TOKEN_HEX_LEN}-char lowercase hex (SHA-256 HMAC output)",
+            )));
+        }
+        Ok(())
+    }
+    for w in &tokens.words {
+        check_token("word token", w)?;
+    }
+    for t in &tokens.trigrams {
+        check_token("trigram token", t)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
