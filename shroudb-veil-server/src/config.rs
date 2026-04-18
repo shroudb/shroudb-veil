@@ -84,6 +84,16 @@ pub struct EngineConfig {
     pub default_result_limit: usize,
     #[serde(default)]
     pub indexes: Vec<String>,
+    /// When `true`, startup fails if the `[audit]` capability resolves to
+    /// anything other than `Enabled`. Default `true` — production must
+    /// explicitly opt out with a justification.
+    #[serde(default = "default_true")]
+    pub require_audit: bool,
+    /// When `true`, startup fails if the `[policy]` capability resolves to
+    /// anything other than `Enabled`. Default `true` — production must
+    /// explicitly opt out with a justification.
+    #[serde(default = "default_true")]
+    pub require_policy: bool,
 }
 
 impl Default for EngineConfig {
@@ -91,12 +101,18 @@ impl Default for EngineConfig {
         Self {
             default_result_limit: default_result_limit(),
             indexes: Vec::new(),
+            require_audit: true,
+            require_policy: true,
         }
     }
 }
 
 fn default_result_limit() -> usize {
     100
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Load config from a TOML file, or return defaults.

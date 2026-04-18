@@ -57,6 +57,15 @@ pub struct VeilConfig {
     /// Maximum entries per index (0 = unlimited). Rejects PUT on new entries
     /// once the limit is reached. Updates to existing entries are always allowed.
     pub max_entries_per_index: u64,
+    /// When `true`, `VeilEngine::new` fails if the Chronicle audit capability
+    /// is not `Enabled`. Production deployments should leave this `true` so
+    /// every operation is audit-logged; tests opt out via
+    /// `Capability::DisabledForTests` together with `require_audit = false`.
+    pub require_audit: bool,
+    /// When `true`, `VeilEngine::new` fails if the Sentry policy evaluator
+    /// capability is not `Enabled`. Production deployments should leave this
+    /// `true` so policy is always enforced.
+    pub require_policy: bool,
 }
 
 impl Default for VeilConfig {
@@ -64,6 +73,8 @@ impl Default for VeilConfig {
         Self {
             default_result_limit: 100,
             max_entries_per_index: 0, // unlimited by default
+            require_audit: false,
+            require_policy: false,
         }
     }
 }
@@ -154,6 +165,26 @@ impl<S: Store> VeilEngine<S> {
         policy_evaluator: Capability<Arc<dyn PolicyEvaluator>>,
         chronicle: Capability<Arc<dyn ChronicleOps>>,
     ) -> Result<Self, VeilError> {
+        if config.require_policy && !policy_evaluator.is_enabled() {
+            return Err(VeilError::Internal(format!(
+                "require_policy = true but policy capability is {}; \
+                 either wire a Sentry PolicyEvaluator or set require_policy = false \
+                 with a documented justification",
+                policy_evaluator
+                    .justification()
+                    .unwrap_or("disabled (unknown reason)")
+            )));
+        }
+        if config.require_audit && !chronicle.is_enabled() {
+            return Err(VeilError::Internal(format!(
+                "require_audit = true but chronicle capability is {}; \
+                 either wire a Chronicle audit sink or set require_audit = false \
+                 with a documented justification",
+                chronicle
+                    .justification()
+                    .unwrap_or("disabled (unknown reason)")
+            )));
+        }
         let indexes = IndexManager::new(store);
         indexes.init().await?;
         Ok(Self {
@@ -2394,23 +2425,47 @@ mod debt_tests {
     /// if no test fails we would have no ratchet).
     #[tokio::test]
     async fn debt_4_engine_must_reject_missing_chronicle_in_enforcing_mode() {
-        // Once the config/server wiring is added, a VeilConfig flag like
-        // `require_audit: true` must make construction fail when
-        // chronicle = None. Today VeilConfig has no such flag.
-        let has_require_audit_flag = {
-            // Reflect: try to construct a config with a hypothetical flag.
-            // Because no such field exists, we force the test to fail by
-            // asserting on an invariant the code does not yet satisfy.
-            let _cfg = VeilConfig::default();
-            false
+        // `require_audit = true` must fail engine construction when the
+        // chronicle capability is not Enabled, regardless of the disabled
+        // reason (test harness or production justification). This is the
+        // knob that stops a production deploy from silently running with
+        // no audit sink.
+        let store = shroudb_storage::test_util::create_test_store("veil-debt-4").await;
+        let config = VeilConfig {
+            require_audit: true,
+            ..Default::default()
         };
+
+        let result = VeilEngine::new(
+            store,
+            config,
+            Capability::DisabledForTests,
+            Capability::DisabledForTests,
+        )
+        .await;
         assert!(
-            has_require_audit_flag,
-            "VeilConfig must expose a `require_audit`/`require_policy` flag that \
-             fails engine construction when Chronicle/Sentry are absent. Today \
-             the server binary passes `None, None` and the engine silently \
-             accepts it — security capabilities declared in the type signature \
-             are never populated in production."
+            result.is_err(),
+            "VeilEngine::new must fail when require_audit = true and chronicle \
+             is not Enabled; got Ok(...)",
+        );
+
+        // Symmetric check: require_policy also fails when Sentry is not wired.
+        let store = shroudb_storage::test_util::create_test_store("veil-debt-4b").await;
+        let config = VeilConfig {
+            require_policy: true,
+            ..Default::default()
+        };
+        let result = VeilEngine::new(
+            store,
+            config,
+            Capability::DisabledWithJustification("local dev override"),
+            Capability::DisabledForTests,
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "VeilEngine::new must fail when require_policy = true and policy \
+             evaluator is not Enabled; got Ok(...)",
         );
     }
 
