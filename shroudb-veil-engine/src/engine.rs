@@ -599,9 +599,8 @@ impl<S: Store> VeilEngine<S> {
             .search_via_index(index_name, &query_blind, mode, limit)
             .await?;
 
-        let _ = self
-            .emit_audit_event("SEARCH", index_name, EventResult::Ok, actor, start)
-            .await;
+        self.emit_audit_event("SEARCH", index_name, EventResult::Ok, actor, start)
+            .await?;
         Ok(result)
     }
 
