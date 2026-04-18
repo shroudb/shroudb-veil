@@ -12,7 +12,7 @@ use tower_http::cors::{Any, CorsLayer};
 use shroudb_acl::{AclRequirement, AuthContext, Scope, TokenValidator};
 use shroudb_store::Store;
 use shroudb_veil_core::matching::MatchMode;
-use shroudb_veil_engine::engine::VeilEngine;
+use shroudb_veil_engine::engine::{SearchOptions, VeilEngine};
 
 // -- State ------------------------------------------------------------------
 
@@ -198,12 +198,13 @@ async fn index_create<S: Store + 'static>(
     headers: HeaderMap,
     Json(body): Json<NameParam>,
 ) -> Response {
-    let _auth = match require_auth(&state, &headers, &AclRequirement::Admin) {
+    let auth = match require_auth(&state, &headers, &AclRequirement::Admin) {
         Ok(a) => a,
         Err(r) => return *r,
     };
+    let actor = auth.as_ref().map(|c| c.actor.as_str());
 
-    match state.engine.index_create(&body.name).await {
+    match state.engine.index_create(&body.name, actor).await {
         Ok(info) => (
             StatusCode::OK,
             Json(json!({
@@ -223,12 +224,13 @@ async fn index_destroy<S: Store + 'static>(
     headers: HeaderMap,
     Json(body): Json<NameParam>,
 ) -> Response {
-    let _auth = match require_auth(&state, &headers, &AclRequirement::Admin) {
+    let auth = match require_auth(&state, &headers, &AclRequirement::Admin) {
         Ok(a) => a,
         Err(r) => return *r,
     };
+    let actor = auth.as_ref().map(|c| c.actor.as_str());
 
-    match state.engine.index_destroy(&body.name).await {
+    match state.engine.index_destroy(&body.name, actor).await {
         Ok(deleted) => (
             StatusCode::OK,
             Json(json!({
@@ -247,12 +249,13 @@ async fn index_rotate<S: Store + 'static>(
     headers: HeaderMap,
     Json(body): Json<NameParam>,
 ) -> Response {
-    let _auth = match require_auth(&state, &headers, &AclRequirement::Admin) {
+    let auth = match require_auth(&state, &headers, &AclRequirement::Admin) {
         Ok(a) => a,
         Err(r) => return *r,
     };
+    let actor = auth.as_ref().map(|c| c.actor.as_str());
 
-    match state.engine.index_rotate(&body.name).await {
+    match state.engine.index_rotate(&body.name, actor).await {
         Ok(info) => (
             StatusCode::OK,
             Json(json!({
@@ -272,12 +275,13 @@ async fn index_reindex<S: Store + 'static>(
     headers: HeaderMap,
     Json(body): Json<NameParam>,
 ) -> Response {
-    let _auth = match require_auth(&state, &headers, &AclRequirement::Admin) {
+    let auth = match require_auth(&state, &headers, &AclRequirement::Admin) {
         Ok(a) => a,
         Err(r) => return *r,
     };
+    let actor = auth.as_ref().map(|c| c.actor.as_str());
 
-    match state.engine.index_reindex(&body.name).await {
+    match state.engine.index_reindex(&body.name, actor).await {
         Ok(result) => (
             StatusCode::OK,
             Json(json!({
@@ -297,14 +301,15 @@ async fn index_reconcile<S: Store + 'static>(
     headers: HeaderMap,
     Json(body): Json<ReconcileBody>,
 ) -> Response {
-    let _auth = match require_auth(&state, &headers, &AclRequirement::Admin) {
+    let auth = match require_auth(&state, &headers, &AclRequirement::Admin) {
         Ok(a) => a,
         Err(r) => return *r,
     };
+    let actor = auth.as_ref().map(|c| c.actor.as_str());
 
     match state
         .engine
-        .reconcile_orphans(&body.name, &body.valid_ids)
+        .reconcile_orphans(&body.name, &body.valid_ids, actor)
         .await
     {
         Ok(result) => (
@@ -365,10 +370,11 @@ async fn put<S: Store + 'static>(
         scope: Scope::Write,
         tenant_override: None,
     };
-    let _auth = match require_auth(&state, &headers, &acl) {
+    let auth = match require_auth(&state, &headers, &acl) {
         Ok(a) => a,
         Err(r) => return *r,
     };
+    let actor = auth.as_ref().map(|c| c.actor.as_str());
 
     match state
         .engine
@@ -378,6 +384,7 @@ async fn put<S: Store + 'static>(
             &body.data,
             body.field.as_deref(),
             body.blind,
+            actor,
         )
         .await
     {
@@ -404,12 +411,17 @@ async fn delete_entry<S: Store + 'static>(
         scope: Scope::Write,
         tenant_override: None,
     };
-    let _auth = match require_auth(&state, &headers, &acl) {
+    let auth = match require_auth(&state, &headers, &acl) {
         Ok(a) => a,
         Err(r) => return *r,
     };
+    let actor = auth.as_ref().map(|c| c.actor.as_str());
 
-    match state.engine.delete(&params.index, &params.entry_id).await {
+    match state
+        .engine
+        .delete(&params.index, &params.entry_id, actor)
+        .await
+    {
         Ok(()) => (
             StatusCode::OK,
             Json(json!({
@@ -432,26 +444,26 @@ async fn search<S: Store + 'static>(
         scope: Scope::Read,
         tenant_override: None,
     };
-    let _auth = match require_auth(&state, &headers, &acl) {
+    let auth = match require_auth(&state, &headers, &acl) {
         Ok(a) => a,
         Err(r) => return *r,
     };
+    let actor = auth.as_ref().map(|c| c.actor.as_str());
 
     let match_mode = match MatchMode::parse(&params.mode) {
         Ok(m) => m,
         Err(e) => return err_response(StatusCode::BAD_REQUEST, &e),
     };
 
+    let opts = SearchOptions {
+        mode: match_mode,
+        field: params.field.as_deref(),
+        limit: params.limit,
+        blind: params.blind,
+    };
     match state
         .engine
-        .search(
-            &params.index,
-            &params.query,
-            match_mode,
-            params.field.as_deref(),
-            params.limit,
-            params.blind,
-        )
+        .search(&params.index, &params.query, opts, actor)
         .await
     {
         Ok(result) => {
@@ -526,4 +538,30 @@ async fn health<S: Store + 'static>(State(state): State<AppState<S>>) -> Respons
         })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shroudb_server_bootstrap::Capability;
+    use shroudb_veil_engine::engine::VeilConfig;
+
+    /// Smoke test: router builds against a test engine. Full request-flow
+    /// coverage for dispatch (including actor forwarding) lives in the
+    /// engine and protocol crates.
+    #[tokio::test]
+    async fn router_builds_from_engine() {
+        let store = shroudb_storage::test_util::create_test_store("veil-http-test").await;
+        let engine = Arc::new(
+            VeilEngine::new(
+                store,
+                VeilConfig::default(),
+                Capability::DisabledForTests,
+                Capability::DisabledForTests,
+            )
+            .await
+            .unwrap(),
+        );
+        let _app = router(engine, None);
+    }
 }

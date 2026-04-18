@@ -106,6 +106,30 @@ pub struct IndexReindexResult {
     pub entries_cleared: u64,
 }
 
+/// Search parameters bundled to keep the `search()` signature below the
+/// arity lint threshold once actor identity is threaded through.
+#[derive(Debug, Clone, Copy)]
+pub struct SearchOptions<'a> {
+    pub mode: MatchMode,
+    pub field: Option<&'a str>,
+    pub limit: Option<usize>,
+    /// When `true`, `query` is interpreted as a base64-encoded `BlindTokenSet`
+    /// JSON (E2EE mode). When `false`, `query` is plaintext to be tokenized
+    /// and blinded server-side.
+    pub blind: bool,
+}
+
+impl Default for SearchOptions<'_> {
+    fn default() -> Self {
+        Self {
+            mode: MatchMode::Contains,
+            field: None,
+            limit: None,
+            blind: false,
+        }
+    }
+}
+
 /// The unified Veil engine. Single entry point for all operations.
 ///
 /// Generic over `S: Store` — works identically with `EmbeddedStore`
@@ -208,9 +232,13 @@ impl<S: Store> VeilEngine<S> {
 
     // ── Index management ──────────────────────────────────────────
 
-    pub async fn index_create(&self, name: &str) -> Result<IndexInfoResult, VeilError> {
+    pub async fn index_create(
+        &self,
+        name: &str,
+        actor: Option<&str>,
+    ) -> Result<IndexInfoResult, VeilError> {
         let start = Instant::now();
-        self.check_policy(name, "index_create", None).await?;
+        self.check_policy(name, "index_create", actor).await?;
         let idx = self.indexes.create(name).await?;
         self.emit_audit_event("INDEX_CREATE", name, EventResult::Ok, None, start)
             .await?;
@@ -222,9 +250,13 @@ impl<S: Store> VeilEngine<S> {
         })
     }
 
-    pub async fn index_rotate(&self, name: &str) -> Result<IndexInfoResult, VeilError> {
+    pub async fn index_rotate(
+        &self,
+        name: &str,
+        actor: Option<&str>,
+    ) -> Result<IndexInfoResult, VeilError> {
         let start = Instant::now();
-        self.check_policy(name, "index_rotate", None).await?;
+        self.check_policy(name, "index_rotate", actor).await?;
         let idx = self.indexes.rotate(name).await?;
         self.emit_audit_event("INDEX_ROTATE", name, EventResult::Ok, None, start)
             .await?;
@@ -236,9 +268,9 @@ impl<S: Store> VeilEngine<S> {
         })
     }
 
-    pub async fn index_destroy(&self, name: &str) -> Result<u64, VeilError> {
+    pub async fn index_destroy(&self, name: &str, actor: Option<&str>) -> Result<u64, VeilError> {
         let start = Instant::now();
-        self.check_policy(name, "index_destroy", None).await?;
+        self.check_policy(name, "index_destroy", actor).await?;
         let deleted = self.indexes.destroy(name).await?;
         self.emit_audit_event("INDEX_DESTROY", name, EventResult::Ok, None, start)
             .await?;
@@ -260,9 +292,13 @@ impl<S: Store> VeilEngine<S> {
         })
     }
 
-    pub async fn index_reindex(&self, name: &str) -> Result<IndexReindexResult, VeilError> {
+    pub async fn index_reindex(
+        &self,
+        name: &str,
+        actor: Option<&str>,
+    ) -> Result<IndexReindexResult, VeilError> {
         let start = Instant::now();
-        self.check_policy(name, "index_reindex", None).await?;
+        self.check_policy(name, "index_reindex", actor).await?;
         let (idx, deleted) = self.indexes.reindex(name).await?;
         self.emit_audit_event("INDEX_REINDEX", name, EventResult::Ok, None, start)
             .await?;
@@ -332,9 +368,10 @@ impl<S: Store> VeilEngine<S> {
         data_b64: &str,
         field: Option<&str>,
         blind: bool,
+        actor: Option<&str>,
     ) -> Result<u64, VeilError> {
         let start = Instant::now();
-        self.check_policy(index_name, "put", None).await?;
+        self.check_policy(index_name, "put", actor).await?;
         if id.is_empty() {
             return Err(VeilError::InvalidArgument(
                 "entry ID cannot be empty".into(),
@@ -412,9 +449,14 @@ impl<S: Store> VeilEngine<S> {
 
     // ── Delete ────────────────────────────────────────────────────
 
-    pub async fn delete(&self, index_name: &str, id: &str) -> Result<(), VeilError> {
+    pub async fn delete(
+        &self,
+        index_name: &str,
+        id: &str,
+        actor: Option<&str>,
+    ) -> Result<(), VeilError> {
         let start = Instant::now();
-        self.check_policy(index_name, "delete", None).await?;
+        self.check_policy(index_name, "delete", actor).await?;
         let _ = self.indexes.get(index_name)?;
         let ns = tokens_namespace(index_name);
 
@@ -457,6 +499,7 @@ impl<S: Store> VeilEngine<S> {
         &self,
         index_name: &str,
         valid_entry_ids: &[String],
+        _actor: Option<&str>,
     ) -> Result<ReconcileResult, VeilError> {
         let start = Instant::now();
         let _ = self.indexes.get(index_name)?;
@@ -515,13 +558,17 @@ impl<S: Store> VeilEngine<S> {
         &self,
         index_name: &str,
         query: &str,
-        mode: MatchMode,
-        _field: Option<&str>,
-        limit: Option<usize>,
-        blind: bool,
+        opts: SearchOptions<'_>,
+        actor: Option<&str>,
     ) -> Result<SearchResult, VeilError> {
+        let SearchOptions {
+            mode,
+            field: _field,
+            limit,
+            blind,
+        } = opts;
         let start = Instant::now();
-        self.check_policy(index_name, "search", None).await?;
+        self.check_policy(index_name, "search", actor).await?;
         if query.is_empty() {
             return Err(VeilError::InvalidArgument("query cannot be empty".into()));
         }
@@ -791,7 +838,7 @@ mod tests {
     #[tokio::test]
     async fn put_and_search_exact() {
         let engine = setup().await;
-        engine.index_create("users").await.unwrap();
+        engine.index_create("users", None).await.unwrap();
 
         engine
             .put(
@@ -800,11 +847,19 @@ mod tests {
                 &STANDARD.encode(b"Alice Johnson"),
                 None,
                 false,
+                None,
             )
             .await
             .unwrap();
         engine
-            .put("users", "2", &STANDARD.encode(b"Bob Smith"), None, false)
+            .put(
+                "users",
+                "2",
+                &STANDARD.encode(b"Bob Smith"),
+                None,
+                false,
+                None,
+            )
             .await
             .unwrap();
         engine
@@ -814,12 +869,23 @@ mod tests {
                 &STANDARD.encode(b"Charlie Johnson"),
                 None,
                 false,
+                None,
             )
             .await
             .unwrap();
 
         let result = engine
-            .search("users", "johnson", MatchMode::Exact, None, None, false)
+            .search(
+                "users",
+                "johnson",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(result.matched, 2);
@@ -830,7 +896,7 @@ mod tests {
     #[tokio::test]
     async fn put_and_search_contains() {
         let engine = setup().await;
-        engine.index_create("messages").await.unwrap();
+        engine.index_create("messages", None).await.unwrap();
 
         engine
             .put(
@@ -839,6 +905,7 @@ mod tests {
                 &STANDARD.encode(b"hello world foo bar"),
                 None,
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -849,6 +916,7 @@ mod tests {
                 &STANDARD.encode(b"goodbye world baz"),
                 None,
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -857,10 +925,13 @@ mod tests {
             .search(
                 "messages",
                 "hello world",
-                MatchMode::Contains,
+                SearchOptions {
+                    mode: MatchMode::Contains,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
                 None,
-                None,
-                false,
             )
             .await
             .unwrap();
@@ -874,7 +945,7 @@ mod tests {
     #[tokio::test]
     async fn search_with_json_field() {
         let engine = setup().await;
-        engine.index_create("contacts").await.unwrap();
+        engine.index_create("contacts", None).await.unwrap();
 
         let data = serde_json::json!({"name": "Alice", "city": "Portland"});
         engine
@@ -884,12 +955,23 @@ mod tests {
                 &STANDARD.encode(data.to_string().as_bytes()),
                 Some("name"),
                 false,
+                None,
             )
             .await
             .unwrap();
 
         let result = engine
-            .search("contacts", "alice", MatchMode::Exact, None, None, false)
+            .search(
+                "contacts",
+                "alice",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(result.matched, 1);
@@ -898,16 +980,26 @@ mod tests {
     #[tokio::test]
     async fn delete_entry() {
         let engine = setup().await;
-        engine.index_create("test").await.unwrap();
+        engine.index_create("test", None).await.unwrap();
 
         engine
-            .put("test", "a", &STANDARD.encode(b"hello"), None, false)
+            .put("test", "a", &STANDARD.encode(b"hello"), None, false, None)
             .await
             .unwrap();
-        engine.delete("test", "a").await.unwrap();
+        engine.delete("test", "a", None).await.unwrap();
 
         let result = engine
-            .search("test", "hello", MatchMode::Exact, None, None, false)
+            .search(
+                "test",
+                "hello",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(result.matched, 0);
@@ -916,7 +1008,7 @@ mod tests {
     #[tokio::test]
     async fn tokenize_returns_blind_tokens() {
         let engine = setup().await;
-        engine.index_create("test").await.unwrap();
+        engine.index_create("test", None).await.unwrap();
 
         let result = engine
             .tokenize("test", &STANDARD.encode(b"hello world"), None)
@@ -933,7 +1025,7 @@ mod tests {
     #[tokio::test]
     async fn search_limit_applied() {
         let engine = setup().await;
-        engine.index_create("test").await.unwrap();
+        engine.index_create("test", None).await.unwrap();
 
         for i in 0..10 {
             engine
@@ -943,13 +1035,24 @@ mod tests {
                     &STANDARD.encode(b"common word"),
                     None,
                     false,
+                    None,
                 )
                 .await
                 .unwrap();
         }
 
         let result = engine
-            .search("test", "common", MatchMode::Exact, None, Some(3), false)
+            .search(
+                "test",
+                "common",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: Some(3),
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(result.hits.len(), 3);
@@ -961,10 +1064,20 @@ mod tests {
     #[tokio::test]
     async fn empty_query_rejected() {
         let engine = setup().await;
-        engine.index_create("test").await.unwrap();
+        engine.index_create("test", None).await.unwrap();
 
         let err = engine
-            .search("test", "", MatchMode::Exact, None, None, false)
+            .search(
+                "test",
+                "",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await;
         assert!(err.is_err());
     }
@@ -974,7 +1087,17 @@ mod tests {
         let engine = setup().await;
 
         let err = engine
-            .search("nope", "query", MatchMode::Exact, None, None, false)
+            .search(
+                "nope",
+                "query",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await;
         assert!(err.is_err());
     }
@@ -982,14 +1105,14 @@ mod tests {
     #[tokio::test]
     async fn index_info_returns_entry_count() {
         let engine = setup().await;
-        engine.index_create("test").await.unwrap();
+        engine.index_create("test", None).await.unwrap();
 
         engine
-            .put("test", "a", &STANDARD.encode(b"hello"), None, false)
+            .put("test", "a", &STANDARD.encode(b"hello"), None, false, None)
             .await
             .unwrap();
         engine
-            .put("test", "b", &STANDARD.encode(b"world"), None, false)
+            .put("test", "b", &STANDARD.encode(b"world"), None, false, None)
             .await
             .unwrap();
 
@@ -1001,24 +1124,24 @@ mod tests {
     #[tokio::test]
     async fn test_reconcile_removes_orphans() {
         let engine = setup().await;
-        engine.index_create("test").await.unwrap();
+        engine.index_create("test", None).await.unwrap();
 
         engine
-            .put("test", "a", &STANDARD.encode(b"alpha"), None, false)
+            .put("test", "a", &STANDARD.encode(b"alpha"), None, false, None)
             .await
             .unwrap();
         engine
-            .put("test", "b", &STANDARD.encode(b"bravo"), None, false)
+            .put("test", "b", &STANDARD.encode(b"bravo"), None, false, None)
             .await
             .unwrap();
         engine
-            .put("test", "c", &STANDARD.encode(b"charlie"), None, false)
+            .put("test", "c", &STANDARD.encode(b"charlie"), None, false, None)
             .await
             .unwrap();
 
         // Only "b" is valid — "a" and "c" are orphans.
         let result = engine
-            .reconcile_orphans("test", &["b".to_string()])
+            .reconcile_orphans("test", &["b".to_string()], None)
             .await
             .unwrap();
         assert_eq!(result.orphans_removed, 2);
@@ -1029,14 +1152,34 @@ mod tests {
 
         // Verify only "b" remains searchable.
         let search = engine
-            .search("test", "bravo", MatchMode::Exact, None, None, false)
+            .search(
+                "test",
+                "bravo",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(search.matched, 1);
         assert_eq!(search.hits[0].id, "b");
 
         let search = engine
-            .search("test", "alpha", MatchMode::Exact, None, None, false)
+            .search(
+                "test",
+                "alpha",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(search.matched, 0);
@@ -1045,24 +1188,28 @@ mod tests {
     #[tokio::test]
     async fn test_reconcile_no_orphans() {
         let engine = setup().await;
-        engine.index_create("test").await.unwrap();
+        engine.index_create("test", None).await.unwrap();
 
         engine
-            .put("test", "a", &STANDARD.encode(b"alpha"), None, false)
+            .put("test", "a", &STANDARD.encode(b"alpha"), None, false, None)
             .await
             .unwrap();
         engine
-            .put("test", "b", &STANDARD.encode(b"bravo"), None, false)
+            .put("test", "b", &STANDARD.encode(b"bravo"), None, false, None)
             .await
             .unwrap();
         engine
-            .put("test", "c", &STANDARD.encode(b"charlie"), None, false)
+            .put("test", "c", &STANDARD.encode(b"charlie"), None, false, None)
             .await
             .unwrap();
 
         // All three are valid — nothing to remove.
         let result = engine
-            .reconcile_orphans("test", &["a".to_string(), "b".to_string(), "c".to_string()])
+            .reconcile_orphans(
+                "test",
+                &["a".to_string(), "b".to_string(), "c".to_string()],
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(result.orphans_removed, 0);
@@ -1074,10 +1221,10 @@ mod tests {
     #[tokio::test]
     async fn test_reconcile_empty_index() {
         let engine = setup().await;
-        engine.index_create("test").await.unwrap();
+        engine.index_create("test", None).await.unwrap();
 
         let result = engine
-            .reconcile_orphans("test", &["a".to_string()])
+            .reconcile_orphans("test", &["a".to_string()], None)
             .await
             .unwrap();
         assert_eq!(result.orphans_removed, 0);
@@ -1086,23 +1233,40 @@ mod tests {
     #[tokio::test]
     async fn fuzzy_search_finds_similar() {
         let engine = setup().await;
-        engine.index_create("test").await.unwrap();
+        engine.index_create("test", None).await.unwrap();
 
         engine
-            .put("test", "1", &STANDARD.encode(b"hello"), None, false)
+            .put("test", "1", &STANDARD.encode(b"hello"), None, false, None)
             .await
             .unwrap();
         engine
-            .put("test", "2", &STANDARD.encode(b"helicopter"), None, false)
+            .put(
+                "test",
+                "2",
+                &STANDARD.encode(b"helicopter"),
+                None,
+                false,
+                None,
+            )
             .await
             .unwrap();
         engine
-            .put("test", "3", &STANDARD.encode(b"goodbye"), None, false)
+            .put("test", "3", &STANDARD.encode(b"goodbye"), None, false, None)
             .await
             .unwrap();
 
         let result = engine
-            .search("test", "helo", MatchMode::Fuzzy, None, None, false)
+            .search(
+                "test",
+                "helo",
+                SearchOptions {
+                    mode: MatchMode::Fuzzy,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
 
@@ -1149,7 +1313,7 @@ mod tests {
         .unwrap();
 
         // index_create should be denied by policy
-        let err = engine.index_create("test").await;
+        let err = engine.index_create("test", None).await;
         assert!(err.is_err());
         let msg = err.unwrap_err().to_string();
         assert!(
@@ -1161,7 +1325,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_concurrent_put_to_same_index() {
         let engine = Arc::new(setup().await);
-        engine.index_create("concurrent").await.unwrap();
+        engine.index_create("concurrent", None).await.unwrap();
 
         // Use unique words per entry to avoid concurrent writes to the same
         // inverted index posting list (which is a read-modify-write operation).
@@ -1175,6 +1339,7 @@ mod tests {
                     &STANDARD.encode(format!("uniqueprefix{i}").as_bytes()),
                     None,
                     false,
+                    None,
                 )
                 .await
             }));
@@ -1194,10 +1359,13 @@ mod tests {
                 .search(
                     "concurrent",
                     &format!("uniqueprefix{i}"),
-                    MatchMode::Exact,
+                    SearchOptions {
+                        mode: MatchMode::Exact,
+                        field: None,
+                        limit: None,
+                        blind: false,
+                    },
                     None,
-                    None,
-                    false,
                 )
                 .await
                 .unwrap();
@@ -1224,7 +1392,7 @@ mod tests {
         )
         .await
         .unwrap();
-        engine.index_create("limited").await.unwrap();
+        engine.index_create("limited", None).await.unwrap();
 
         // Insert 3 entries — all should succeed
         for i in 0..3 {
@@ -1235,6 +1403,7 @@ mod tests {
                     &STANDARD.encode(format!("val-{i}")),
                     None,
                     false,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -1242,7 +1411,14 @@ mod tests {
 
         // 4th entry should be rejected
         let err = engine
-            .put("limited", "e-3", &STANDARD.encode("val-3"), None, false)
+            .put(
+                "limited",
+                "e-3",
+                &STANDARD.encode("val-3"),
+                None,
+                false,
+                None,
+            )
             .await
             .unwrap_err();
         assert!(
@@ -1252,7 +1428,14 @@ mod tests {
 
         // Updating an existing entry should still work (not a new entry)
         engine
-            .put("limited", "e-0", &STANDARD.encode("updated-0"), None, false)
+            .put(
+                "limited",
+                "e-0",
+                &STANDARD.encode("updated-0"),
+                None,
+                false,
+                None,
+            )
             .await
             .unwrap();
     }
@@ -1271,7 +1454,7 @@ mod tests {
     #[tokio::test]
     async fn blind_put_and_search_exact() {
         let engine = setup().await;
-        engine.index_create("e2ee").await.unwrap();
+        engine.index_create("e2ee", None).await.unwrap();
 
         let client_key = [0x42u8; 32];
 
@@ -1282,6 +1465,7 @@ mod tests {
                 &blind_b64(&client_key, "hello world"),
                 None,
                 true,
+                None,
             )
             .await
             .unwrap();
@@ -1292,6 +1476,7 @@ mod tests {
                 &blind_b64(&client_key, "goodbye world"),
                 None,
                 true,
+                None,
             )
             .await
             .unwrap();
@@ -1300,10 +1485,13 @@ mod tests {
             .search(
                 "e2ee",
                 &blind_b64(&client_key, "hello"),
-                MatchMode::Exact,
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: true,
+                },
                 None,
-                None,
-                true,
             )
             .await
             .unwrap();
@@ -1314,7 +1502,7 @@ mod tests {
     #[tokio::test]
     async fn blind_put_and_search_contains() {
         let engine = setup().await;
-        engine.index_create("e2ee").await.unwrap();
+        engine.index_create("e2ee", None).await.unwrap();
 
         let client_key = [0x42u8; 32];
 
@@ -1325,6 +1513,7 @@ mod tests {
                 &blind_b64(&client_key, "hello world foo"),
                 None,
                 true,
+                None,
             )
             .await
             .unwrap();
@@ -1335,6 +1524,7 @@ mod tests {
                 &blind_b64(&client_key, "goodbye world bar"),
                 None,
                 true,
+                None,
             )
             .await
             .unwrap();
@@ -1343,10 +1533,13 @@ mod tests {
             .search(
                 "e2ee",
                 &blind_b64(&client_key, "hello world"),
-                MatchMode::Contains,
+                SearchOptions {
+                    mode: MatchMode::Contains,
+                    field: None,
+                    limit: None,
+                    blind: true,
+                },
                 None,
-                None,
-                true,
             )
             .await
             .unwrap();
@@ -1358,11 +1551,21 @@ mod tests {
     #[tokio::test]
     async fn blind_search_empty_tokens_rejected() {
         let engine = setup().await;
-        engine.index_create("e2ee").await.unwrap();
+        engine.index_create("e2ee", None).await.unwrap();
 
         let empty_json = STANDARD.encode(br#"{"words":[],"trigrams":[]}"#);
         let err = engine
-            .search("e2ee", &empty_json, MatchMode::Exact, None, None, true)
+            .search(
+                "e2ee",
+                &empty_json,
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: true,
+                },
+                None,
+            )
             .await;
         assert!(err.is_err());
     }
@@ -1370,11 +1573,18 @@ mod tests {
     #[tokio::test]
     async fn blind_put_empty_id_rejected() {
         let engine = setup().await;
-        engine.index_create("e2ee").await.unwrap();
+        engine.index_create("e2ee", None).await.unwrap();
 
         let client_key = [0x42u8; 32];
         let err = engine
-            .put("e2ee", "", &blind_b64(&client_key, "test"), None, true)
+            .put(
+                "e2ee",
+                "",
+                &blind_b64(&client_key, "test"),
+                None,
+                true,
+                None,
+            )
             .await;
         assert!(err.is_err());
     }
@@ -1394,7 +1604,7 @@ mod tests {
         )
         .await
         .unwrap();
-        engine.index_create("limited").await.unwrap();
+        engine.index_create("limited", None).await.unwrap();
 
         let client_key = [0x42u8; 32];
         engine
@@ -1404,6 +1614,7 @@ mod tests {
                 &blind_b64(&client_key, "first"),
                 None,
                 true,
+                None,
             )
             .await
             .unwrap();
@@ -1414,6 +1625,7 @@ mod tests {
                 &blind_b64(&client_key, "second"),
                 None,
                 true,
+                None,
             )
             .await
             .unwrap();
@@ -1425,6 +1637,7 @@ mod tests {
                 &blind_b64(&client_key, "third"),
                 None,
                 true,
+                None,
             )
             .await
             .unwrap_err();
@@ -1438,6 +1651,7 @@ mod tests {
                 &blind_b64(&client_key, "updated"),
                 None,
                 true,
+                None,
             )
             .await
             .unwrap();
@@ -1449,7 +1663,14 @@ mod tests {
 
         let client_key = [0x42u8; 32];
         let err = engine
-            .put("nope", "m1", &blind_b64(&client_key, "test"), None, true)
+            .put(
+                "nope",
+                "m1",
+                &blind_b64(&client_key, "test"),
+                None,
+                true,
+                None,
+            )
             .await;
         assert!(err.is_err());
     }
@@ -1463,10 +1684,13 @@ mod tests {
             .search(
                 "nope",
                 &blind_b64(&client_key, "test"),
-                MatchMode::Exact,
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: true,
+                },
                 None,
-                None,
-                true,
             )
             .await;
         assert!(err.is_err());
@@ -1475,11 +1699,18 @@ mod tests {
     #[tokio::test]
     async fn blind_put_search_fuzzy() {
         let engine = setup().await;
-        engine.index_create("e2ee").await.unwrap();
+        engine.index_create("e2ee", None).await.unwrap();
 
         let client_key = [0x42u8; 32];
         engine
-            .put("e2ee", "m1", &blind_b64(&client_key, "hello"), None, true)
+            .put(
+                "e2ee",
+                "m1",
+                &blind_b64(&client_key, "hello"),
+                None,
+                true,
+                None,
+            )
             .await
             .unwrap();
         engine
@@ -1489,11 +1720,19 @@ mod tests {
                 &blind_b64(&client_key, "helicopter"),
                 None,
                 true,
+                None,
             )
             .await
             .unwrap();
         engine
-            .put("e2ee", "m3", &blind_b64(&client_key, "goodbye"), None, true)
+            .put(
+                "e2ee",
+                "m3",
+                &blind_b64(&client_key, "goodbye"),
+                None,
+                true,
+                None,
+            )
             .await
             .unwrap();
 
@@ -1501,10 +1740,13 @@ mod tests {
             .search(
                 "e2ee",
                 &blind_b64(&client_key, "helo"),
-                MatchMode::Fuzzy,
+                SearchOptions {
+                    mode: MatchMode::Fuzzy,
+                    field: None,
+                    limit: None,
+                    blind: true,
+                },
                 None,
-                None,
-                true,
             )
             .await
             .unwrap();
@@ -1516,24 +1758,34 @@ mod tests {
     #[tokio::test]
     async fn blind_put_delete_and_search() {
         let engine = setup().await;
-        engine.index_create("e2ee").await.unwrap();
+        engine.index_create("e2ee", None).await.unwrap();
 
         let client_key = [0x42u8; 32];
         engine
-            .put("e2ee", "m1", &blind_b64(&client_key, "hello"), None, true)
+            .put(
+                "e2ee",
+                "m1",
+                &blind_b64(&client_key, "hello"),
+                None,
+                true,
+                None,
+            )
             .await
             .unwrap();
 
-        engine.delete("e2ee", "m1").await.unwrap();
+        engine.delete("e2ee", "m1", None).await.unwrap();
 
         let result = engine
             .search(
                 "e2ee",
                 &blind_b64(&client_key, "hello"),
-                MatchMode::Exact,
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: true,
+                },
                 None,
-                None,
-                true,
             )
             .await
             .unwrap();
@@ -1543,55 +1795,85 @@ mod tests {
     #[tokio::test]
     async fn blind_put_invalid_json_rejected() {
         let engine = setup().await;
-        engine.index_create("e2ee").await.unwrap();
+        engine.index_create("e2ee", None).await.unwrap();
 
         // Valid base64 but not valid BlindTokenSet JSON
         let bad = STANDARD.encode(b"not json");
-        let err = engine.put("e2ee", "m1", &bad, None, true).await;
+        let err = engine.put("e2ee", "m1", &bad, None, true, None).await;
         assert!(err.is_err());
     }
 
     #[tokio::test]
     async fn rotate_produces_new_key_and_clears_entries() {
         let engine = setup().await;
-        engine.index_create("rot-test").await.unwrap();
+        engine.index_create("rot-test", None).await.unwrap();
 
         // Add entries
         let data = STANDARD.encode("hello world");
         engine
-            .put("rot-test", "e1", &data, None, false)
+            .put("rot-test", "e1", &data, None, false, None)
             .await
             .unwrap();
         engine
-            .put("rot-test", "e2", &data, None, false)
+            .put("rot-test", "e2", &data, None, false, None)
             .await
             .unwrap();
 
         // Search finds them
         let result = engine
-            .search("rot-test", "hello", MatchMode::Exact, None, None, false)
+            .search(
+                "rot-test",
+                "hello",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(result.matched, 2);
 
         // Rotate
-        let info = engine.index_rotate("rot-test").await.unwrap();
+        let info = engine.index_rotate("rot-test", None).await.unwrap();
         assert_eq!(info.entry_count, 0);
 
         // Old tokens are gone — search returns nothing
         let result = engine
-            .search("rot-test", "hello", MatchMode::Exact, None, None, false)
+            .search(
+                "rot-test",
+                "hello",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(result.matched, 0);
 
         // Re-index with new key works
         engine
-            .put("rot-test", "e1", &data, None, false)
+            .put("rot-test", "e1", &data, None, false, None)
             .await
             .unwrap();
         let result = engine
-            .search("rot-test", "hello", MatchMode::Exact, None, None, false)
+            .search(
+                "rot-test",
+                "hello",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(result.matched, 1);
@@ -1600,30 +1882,42 @@ mod tests {
     #[tokio::test]
     async fn destroy_removes_index_and_entries() {
         let engine = setup().await;
-        engine.index_create("destroy-test").await.unwrap();
+        engine.index_create("destroy-test", None).await.unwrap();
 
         // Add entries
         let data = STANDARD.encode("hello world");
         engine
-            .put("destroy-test", "e1", &data, None, false)
+            .put("destroy-test", "e1", &data, None, false, None)
             .await
             .unwrap();
         engine
-            .put("destroy-test", "e2", &data, None, false)
+            .put("destroy-test", "e2", &data, None, false, None)
             .await
             .unwrap();
 
         // Destroy
-        let deleted = engine.index_destroy("destroy-test").await.unwrap();
+        let deleted = engine.index_destroy("destroy-test", None).await.unwrap();
         assert_eq!(deleted, 2);
 
         // Index no longer exists — PUT should fail
-        let err = engine.put("destroy-test", "e3", &data, None, false).await;
+        let err = engine
+            .put("destroy-test", "e3", &data, None, false, None)
+            .await;
         assert!(err.is_err(), "PUT to destroyed index should fail");
 
         // SEARCH should fail
         let err = engine
-            .search("destroy-test", "hello", MatchMode::Exact, None, None, false)
+            .search(
+                "destroy-test",
+                "hello",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await;
         assert!(err.is_err(), "SEARCH on destroyed index should fail");
 
@@ -1642,36 +1936,39 @@ mod tests {
     #[tokio::test]
     async fn destroy_nonexistent_fails() {
         let engine = setup().await;
-        let err = engine.index_destroy("nope").await;
+        let err = engine.index_destroy("nope", None).await;
         assert!(err.is_err());
     }
 
     #[tokio::test]
     async fn destroy_then_recreate() {
         let engine = setup().await;
-        engine.index_create("reuse-test").await.unwrap();
+        engine.index_create("reuse-test", None).await.unwrap();
 
         let data = STANDARD.encode("original");
         engine
-            .put("reuse-test", "e1", &data, None, false)
+            .put("reuse-test", "e1", &data, None, false, None)
             .await
             .unwrap();
 
         // Destroy
-        engine.index_destroy("reuse-test").await.unwrap();
+        engine.index_destroy("reuse-test", None).await.unwrap();
 
         // Recreate with fresh key
-        engine.index_create("reuse-test").await.unwrap();
+        engine.index_create("reuse-test", None).await.unwrap();
 
         // Old entries are gone
         let result = engine
             .search(
                 "reuse-test",
                 "original",
-                MatchMode::Exact,
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
                 None,
-                None,
-                false,
             )
             .await
             .unwrap();
@@ -1683,11 +1980,21 @@ mod tests {
         // New entries work
         let data2 = STANDARD.encode("new data");
         engine
-            .put("reuse-test", "e1", &data2, None, false)
+            .put("reuse-test", "e1", &data2, None, false, None)
             .await
             .unwrap();
         let result = engine
-            .search("reuse-test", "new", MatchMode::Contains, None, None, false)
+            .search(
+                "reuse-test",
+                "new",
+                SearchOptions {
+                    mode: MatchMode::Contains,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(result.matched, 1);
@@ -1696,7 +2003,7 @@ mod tests {
     #[tokio::test]
     async fn reindex_clears_entries_and_preserves_key() {
         let engine = setup().await;
-        engine.index_create("reindex-test").await.unwrap();
+        engine.index_create("reindex-test", None).await.unwrap();
 
         // Get the original key material for comparison
         let original_key = engine
@@ -1709,11 +2016,11 @@ mod tests {
         // Add entries
         let data = STANDARD.encode("hello world");
         engine
-            .put("reindex-test", "e1", &data, None, false)
+            .put("reindex-test", "e1", &data, None, false, None)
             .await
             .unwrap();
         engine
-            .put("reindex-test", "e2", &data, None, false)
+            .put("reindex-test", "e2", &data, None, false, None)
             .await
             .unwrap();
         assert_eq!(
@@ -1722,7 +2029,7 @@ mod tests {
         );
 
         // Reindex
-        let result = engine.index_reindex("reindex-test").await.unwrap();
+        let result = engine.index_reindex("reindex-test", None).await.unwrap();
         assert_eq!(result.name, "reindex-test");
         assert_eq!(result.entries_cleared, 2);
         assert_eq!(result.tokenizer_version, TOKENIZER_VERSION);
@@ -1747,11 +2054,21 @@ mod tests {
 
         // Re-add entries with same key and they should be searchable
         engine
-            .put("reindex-test", "e1", &data, None, false)
+            .put("reindex-test", "e1", &data, None, false, None)
             .await
             .unwrap();
         let search = engine
-            .search("reindex-test", "hello", MatchMode::Exact, None, None, false)
+            .search(
+                "reindex-test",
+                "hello",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(search.matched, 1);
@@ -1760,14 +2077,14 @@ mod tests {
     #[tokio::test]
     async fn reindex_nonexistent_fails() {
         let engine = setup().await;
-        let err = engine.index_reindex("nope").await;
+        let err = engine.index_reindex("nope", None).await;
         assert!(err.is_err());
     }
 
     #[tokio::test]
     async fn index_info_includes_tokenizer_version() {
         let engine = setup().await;
-        engine.index_create("ver-test").await.unwrap();
+        engine.index_create("ver-test", None).await.unwrap();
 
         let info = engine.index_info("ver-test").await.unwrap();
         assert_eq!(info.tokenizer_version, TOKENIZER_VERSION);
@@ -1776,14 +2093,14 @@ mod tests {
     #[tokio::test]
     async fn index_create_includes_tokenizer_version() {
         let engine = setup().await;
-        let info = engine.index_create("ver-create").await.unwrap();
+        let info = engine.index_create("ver-create", None).await.unwrap();
         assert_eq!(info.tokenizer_version, TOKENIZER_VERSION);
     }
 
     #[tokio::test]
     async fn inverted_index_search_over_many_entries() {
         let engine = setup().await;
-        engine.index_create("inv-test").await.unwrap();
+        engine.index_create("inv-test", None).await.unwrap();
 
         // Put 100 entries with unique words
         for i in 0..100 {
@@ -1794,6 +2111,7 @@ mod tests {
                     &STANDARD.encode(format!("uniqueword{i} common")),
                     None,
                     false,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -1804,10 +2122,13 @@ mod tests {
             .search(
                 "inv-test",
                 "uniqueword42",
-                MatchMode::Exact,
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
                 None,
-                None,
-                false,
             )
             .await
             .unwrap();
@@ -1824,37 +2145,81 @@ mod tests {
     #[tokio::test]
     async fn inverted_index_update_removes_old_tokens() {
         let engine = setup().await;
-        engine.index_create("inv-update").await.unwrap();
+        engine.index_create("inv-update", None).await.unwrap();
 
         // Put entry with "alpha"
         engine
-            .put("inv-update", "e1", &STANDARD.encode("alpha"), None, false)
+            .put(
+                "inv-update",
+                "e1",
+                &STANDARD.encode("alpha"),
+                None,
+                false,
+                None,
+            )
             .await
             .unwrap();
 
         // Verify it's searchable by "alpha"
         let result = engine
-            .search("inv-update", "alpha", MatchMode::Exact, None, None, false)
+            .search(
+                "inv-update",
+                "alpha",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(result.matched, 1);
 
         // Update same entry to "bravo"
         engine
-            .put("inv-update", "e1", &STANDARD.encode("bravo"), None, false)
+            .put(
+                "inv-update",
+                "e1",
+                &STANDARD.encode("bravo"),
+                None,
+                false,
+                None,
+            )
             .await
             .unwrap();
 
         // "alpha" should no longer match
         let result = engine
-            .search("inv-update", "alpha", MatchMode::Exact, None, None, false)
+            .search(
+                "inv-update",
+                "alpha",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(result.matched, 0);
 
         // "bravo" should match
         let result = engine
-            .search("inv-update", "bravo", MatchMode::Exact, None, None, false)
+            .search(
+                "inv-update",
+                "bravo",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(result.matched, 1);
@@ -1898,13 +2263,20 @@ mod debt_tests {
         let (sentry, requests) = RecordingSentry::new();
         let engine =
             setup_with_caps(Capability::Enabled(sentry), Capability::DisabledForTests).await;
-        engine.index_create("users").await.unwrap();
+        engine.index_create("users", Some("admin")).await.unwrap();
 
         // Clear the create event.
         requests.lock().unwrap().clear();
 
         engine
-            .put("users", "e1", &STANDARD.encode("alice"), None, false)
+            .put(
+                "users",
+                "e1",
+                &STANDARD.encode("alice"),
+                None,
+                false,
+                Some("alice-caller"),
+            )
             .await
             .unwrap();
 
@@ -1929,9 +2301,9 @@ mod debt_tests {
         let (chron, events) = RecordingChronicle::new();
         let engine =
             setup_with_caps(Capability::DisabledForTests, Capability::Enabled(chron)).await;
-        engine.index_create("users").await.unwrap();
+        engine.index_create("users", None).await.unwrap();
         engine
-            .put("users", "e1", &STANDARD.encode("alice"), None, false)
+            .put("users", "e1", &STANDARD.encode("alice"), None, false, None)
             .await
             .unwrap();
 
@@ -1965,8 +2337,8 @@ mod debt_tests {
             )
             .await
             .unwrap();
-            seed.index_create("idx").await.unwrap();
-            seed.put("idx", "e1", &STANDARD.encode("hello"), None, false)
+            seed.index_create("idx", None).await.unwrap();
+            seed.put("idx", "e1", &STANDARD.encode("hello"), None, false, None)
                 .await
                 .unwrap();
         }
@@ -1982,7 +2354,17 @@ mod debt_tests {
         .unwrap();
 
         let result = engine
-            .search("idx", "hello", MatchMode::Exact, None, None, false)
+            .search(
+                "idx",
+                "hello",
+                SearchOptions {
+                    mode: MatchMode::Exact,
+                    field: None,
+                    limit: None,
+                    blind: false,
+                },
+                None,
+            )
             .await;
         assert!(
             result.is_err(),
@@ -2055,7 +2437,7 @@ mod debt_tests {
     async fn debt_6_blind_put_must_reject_non_hex_tokens() {
         let engine =
             setup_with_caps(Capability::DisabledForTests, Capability::DisabledForTests).await;
-        engine.index_create("e2ee").await.unwrap();
+        engine.index_create("e2ee", None).await.unwrap();
 
         // Malformed token set: not hex, not 64 chars.
         let bad = serde_json::json!({
@@ -2064,7 +2446,7 @@ mod debt_tests {
         });
         let payload = STANDARD.encode(serde_json::to_vec(&bad).unwrap());
 
-        let result = engine.put("e2ee", "m1", &payload, None, true).await;
+        let result = engine.put("e2ee", "m1", &payload, None, true, None).await;
         assert!(
             result.is_err(),
             "blind PUT must reject token sets whose strings are not 64-char \

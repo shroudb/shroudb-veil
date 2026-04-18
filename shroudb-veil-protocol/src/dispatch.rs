@@ -41,11 +41,13 @@ pub async fn dispatch<S: Store>(
         return VeilResponse::error(e);
     }
 
+    let actor = auth_context.map(|c| c.actor.as_str());
+
     match cmd {
         VeilCommand::Auth { .. } => VeilResponse::error("AUTH handled at connection layer"),
 
         // ── Index management ──────────────────────────────────────
-        VeilCommand::IndexCreate { name } => match engine.index_create(&name).await {
+        VeilCommand::IndexCreate { name } => match engine.index_create(&name, actor).await {
             Ok(info) => VeilResponse::ok(serde_json::json!({
                 "status": "ok",
                 "index": info.name,
@@ -55,7 +57,7 @@ pub async fn dispatch<S: Store>(
             Err(e) => VeilResponse::error(e.to_string()),
         },
 
-        VeilCommand::IndexRotate { name } => match engine.index_rotate(&name).await {
+        VeilCommand::IndexRotate { name } => match engine.index_rotate(&name, actor).await {
             Ok(info) => VeilResponse::ok(serde_json::json!({
                 "status": "ok",
                 "index": info.name,
@@ -65,7 +67,7 @@ pub async fn dispatch<S: Store>(
             Err(e) => VeilResponse::error(e.to_string()),
         },
 
-        VeilCommand::IndexDestroy { name } => match engine.index_destroy(&name).await {
+        VeilCommand::IndexDestroy { name } => match engine.index_destroy(&name, actor).await {
             Ok(deleted) => VeilResponse::ok(serde_json::json!({
                 "status": "ok",
                 "index": name,
@@ -74,7 +76,7 @@ pub async fn dispatch<S: Store>(
             Err(e) => VeilResponse::error(e.to_string()),
         },
 
-        VeilCommand::IndexReindex { name } => match engine.index_reindex(&name).await {
+        VeilCommand::IndexReindex { name } => match engine.index_reindex(&name, actor).await {
             Ok(result) => VeilResponse::ok(serde_json::json!({
                 "status": "ok",
                 "index": result.name,
@@ -85,7 +87,7 @@ pub async fn dispatch<S: Store>(
         },
 
         VeilCommand::IndexReconcile { name, valid_ids } => {
-            match engine.reconcile_orphans(&name, &valid_ids).await {
+            match engine.reconcile_orphans(&name, &valid_ids, actor).await {
                 Ok(result) => VeilResponse::ok(serde_json::json!({
                     "status": "ok",
                     "index": name,
@@ -136,7 +138,7 @@ pub async fn dispatch<S: Store>(
             field,
             blind,
         } => match engine
-            .put(&index, &id, &data, field.as_deref(), blind)
+            .put(&index, &id, &data, field.as_deref(), blind, actor)
             .await
         {
             Ok(version) => VeilResponse::ok(serde_json::json!({
@@ -148,7 +150,7 @@ pub async fn dispatch<S: Store>(
         },
 
         // ── Delete ────────────────────────────────────────────────
-        VeilCommand::Delete { index, id } => match engine.delete(&index, &id).await {
+        VeilCommand::Delete { index, id } => match engine.delete(&index, &id, actor).await {
             Ok(()) => VeilResponse::ok(serde_json::json!({
                 "status": "ok",
                 "id": id,
@@ -169,10 +171,13 @@ pub async fn dispatch<S: Store>(
                 Ok(m) => m,
                 Err(e) => return VeilResponse::error(e),
             };
-            match engine
-                .search(&index, &query, match_mode, field.as_deref(), limit, blind)
-                .await
-            {
+            let opts = shroudb_veil_engine::engine::SearchOptions {
+                mode: match_mode,
+                field: field.as_deref(),
+                limit,
+                blind,
+            };
+            match engine.search(&index, &query, opts, actor).await {
                 Ok(result) => {
                     let hits: Vec<serde_json::Value> = result
                         .hits
