@@ -21,6 +21,6 @@ Rules:
 - [x] **DEBT-2** — audit must record real actor, not `"anonymous"` sentinel. Test: `debt_2_audit_event_must_record_real_actor_not_anonymous` @ same file.
 - [x] **DEBT-3** — SEARCH must fail-closed when Chronicle is unreachable (parity with other ops). Test: `debt_3_search_must_fail_closed_when_chronicle_unreachable` @ same file.
 - [x] **DEBT-4** — engine must reject missing Chronicle in enforcing mode. Test: `debt_4_engine_must_reject_missing_chronicle_in_enforcing_mode` @ same file.
-- [ ] **DEBT-5** — search prefix/fuzzy score thresholds must be configurable (currently hardcoded 0.6 / 0.3 in `search.rs:23,24`). Test: `debt_5_search_score_thresholds_must_be_configurable` @ same file.
+- [x] **DEBT-5** — search prefix/fuzzy score thresholds must be configurable (currently hardcoded 0.6 / 0.3 in `search.rs:23,24`). Test: `debt_5_search_score_thresholds_must_be_configurable` @ same file.
 - [ ] **DEBT-6** — blind-PUT must reject non-hex tokens (currently accepts garbage; attacker can poison an E2EE index). Test: `debt_6_blind_put_must_reject_non_hex_tokens` @ same file.
 - [ ] **F-veil-7 (L)** — `index_manager.rs:536,552` silently swallows posting-list errors. *No debt test yet; add one before fixing.*

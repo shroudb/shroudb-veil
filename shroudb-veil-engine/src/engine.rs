@@ -66,6 +66,12 @@ pub struct VeilConfig {
     /// capability is not `Enabled`. Production deployments should leave this
     /// `true` so policy is always enforced.
     pub require_policy: bool,
+    /// Minimum trigram-overlap score required for a `Prefix` match. Entries
+    /// below this threshold are filtered out. Default `0.6`.
+    pub prefix_threshold: f64,
+    /// Minimum trigram-overlap score required for a `Fuzzy` match. Default
+    /// `0.3`.
+    pub fuzzy_threshold: f64,
 }
 
 impl Default for VeilConfig {
@@ -75,6 +81,8 @@ impl Default for VeilConfig {
             max_entries_per_index: 0, // unlimited by default
             require_audit: false,
             require_policy: false,
+            prefix_threshold: 0.6,
+            fuzzy_threshold: 0.3,
         }
     }
 }
@@ -343,6 +351,16 @@ impl<S: Store> VeilEngine<S> {
     /// Access the index manager (for seeding from config).
     pub fn index_manager(&self) -> &IndexManager<S> {
         &self.indexes
+    }
+
+    /// Search scoring thresholds derived from `VeilConfig`. Exposed through a
+    /// helper so every `score_entry` call uses the same, deployer-tunable
+    /// values.
+    fn score_thresholds(&self) -> search::ScoreThresholds {
+        search::ScoreThresholds {
+            prefix: self.config.prefix_threshold,
+            fuzzy: self.config.fuzzy_threshold,
+        }
     }
 
     /// Check that the index's tokenizer version matches the current version.
@@ -677,7 +695,9 @@ impl<S: Store> VeilEngine<S> {
                     Err(_) => continue,
                 };
 
-                if let Some(score) = search::score_entry(mode, query_blind, &entry_blind) {
+                if let Some(score) =
+                    search::score_entry(mode, query_blind, &entry_blind, self.score_thresholds())
+                {
                     matched += 1;
                     let id = String::from_utf8_lossy(entry_key).into_owned();
 
@@ -811,7 +831,9 @@ impl<S: Store> VeilEngine<S> {
                 Err(_) => continue,
             };
 
-            if let Some(score) = search::score_entry(mode, query_blind, &entry_blind) {
+            if let Some(score) =
+                search::score_entry(mode, query_blind, &entry_blind, self.score_thresholds())
+            {
                 matched += 1;
                 heap.push(MinScoreHit(SearchHit {
                     id: entry_id,
@@ -2475,17 +2497,87 @@ mod debt_tests {
     /// should be explicit.
     #[tokio::test]
     async fn debt_5_search_score_thresholds_must_be_configurable() {
-        let cfg = VeilConfig::default();
-        // VeilConfig must expose `prefix_threshold` and `fuzzy_threshold`.
-        // These fields do not yet exist. Replace the hardcoded constants
-        // in search::score_entry with config-driven values.
-        let has_configurable_thresholds = false;
-        let _ = cfg;
+        // VeilConfig exposes `prefix_threshold` and `fuzzy_threshold`; the
+        // engine threads them into `search::score_entry`. Proof: a fuzzy
+        // search that passes with the default 0.3 threshold must reject the
+        // same data once the threshold is raised above the achievable score.
+        let store = shroudb_storage::test_util::create_test_store("veil-debt-5-a").await;
+        let engine = VeilEngine::new(
+            store,
+            VeilConfig::default(),
+            Capability::DisabledForTests,
+            Capability::DisabledForTests,
+        )
+        .await
+        .unwrap();
+        engine.index_create("idx", Some("admin")).await.unwrap();
+        engine
+            .put(
+                "idx",
+                "e1",
+                &STANDARD.encode("helicopter"),
+                None,
+                false,
+                Some("admin"),
+            )
+            .await
+            .unwrap();
+
+        let opts = SearchOptions {
+            mode: MatchMode::Fuzzy,
+            field: None,
+            limit: None,
+            blind: false,
+        };
+        let relaxed = engine
+            .search("idx", "helo", opts, Some("admin"))
+            .await
+            .unwrap();
         assert!(
-            has_configurable_thresholds,
-            "VeilConfig must expose `prefix_threshold` and `fuzzy_threshold` \
-             fields consumed by search::score_entry. Today they are hardcoded \
-             to 0.6 / 0.3 in search.rs."
+            relaxed.matched >= 1,
+            "sanity: default fuzzy threshold must still admit the match",
+        );
+
+        // Now raise the fuzzy threshold above 1.0 so no entry can ever
+        // satisfy it. If the config value is actually consumed, the same
+        // query must return zero matches.
+        let store = shroudb_storage::test_util::create_test_store("veil-debt-5-b").await;
+        let strict_cfg = VeilConfig {
+            fuzzy_threshold: 1.5,
+            ..Default::default()
+        };
+        let strict_engine = VeilEngine::new(
+            store,
+            strict_cfg,
+            Capability::DisabledForTests,
+            Capability::DisabledForTests,
+        )
+        .await
+        .unwrap();
+        strict_engine
+            .index_create("idx", Some("admin"))
+            .await
+            .unwrap();
+        strict_engine
+            .put(
+                "idx",
+                "e1",
+                &STANDARD.encode("helicopter"),
+                None,
+                false,
+                Some("admin"),
+            )
+            .await
+            .unwrap();
+        let strict = strict_engine
+            .search("idx", "helo", opts, Some("admin"))
+            .await
+            .unwrap();
+        assert_eq!(
+            strict.matched, 0,
+            "raising fuzzy_threshold above 1.0 must suppress all fuzzy hits; \
+             got {} matches — thresholds are not being read from VeilConfig",
+            strict.matched,
         );
     }
 

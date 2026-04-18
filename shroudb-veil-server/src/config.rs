@@ -94,6 +94,12 @@ pub struct EngineConfig {
     /// explicitly opt out with a justification.
     #[serde(default = "default_true")]
     pub require_policy: bool,
+    /// Minimum trigram-overlap score for a `Prefix` match (0.0–1.0).
+    #[serde(default = "default_prefix_threshold")]
+    pub prefix_threshold: f64,
+    /// Minimum trigram-overlap score for a `Fuzzy` match (0.0–1.0).
+    #[serde(default = "default_fuzzy_threshold")]
+    pub fuzzy_threshold: f64,
 }
 
 impl Default for EngineConfig {
@@ -103,6 +109,8 @@ impl Default for EngineConfig {
             indexes: Vec::new(),
             require_audit: true,
             require_policy: true,
+            prefix_threshold: default_prefix_threshold(),
+            fuzzy_threshold: default_fuzzy_threshold(),
         }
     }
 }
@@ -113,6 +121,14 @@ fn default_result_limit() -> usize {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_prefix_threshold() -> f64 {
+    0.6
+}
+
+fn default_fuzzy_threshold() -> f64 {
+    0.3
 }
 
 /// Load config from a TOML file, or return defaults.

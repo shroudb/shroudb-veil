@@ -130,6 +130,8 @@ async fn run_server<S: Store + 'static>(
         default_result_limit: cfg.engine.default_result_limit,
         require_audit: cfg.engine.require_audit,
         require_policy: cfg.engine.require_policy,
+        prefix_threshold: cfg.engine.prefix_threshold,
+        fuzzy_threshold: cfg.engine.fuzzy_threshold,
         ..Default::default()
     };
     let engine = Arc::new(

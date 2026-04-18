@@ -13,15 +13,40 @@ pub struct SearchHit {
     pub score: f64,
 }
 
+/// Tuning knobs for `score_entry`. The engine reads these from
+/// `VeilConfig` so deployers can tune relevance without recompiling; the
+/// defaults match the historical hardcoded values.
+#[derive(Debug, Clone, Copy)]
+pub struct ScoreThresholds {
+    /// Minimum trigram-overlap score required for a `Prefix` match.
+    pub prefix: f64,
+    /// Minimum trigram-overlap score required for a `Fuzzy` match.
+    pub fuzzy: f64,
+}
+
+impl Default for ScoreThresholds {
+    fn default() -> Self {
+        Self {
+            prefix: 0.6,
+            fuzzy: 0.3,
+        }
+    }
+}
+
 /// Score a stored entry's blind tokens against query blind tokens.
 ///
 /// Returns `Some(score)` if the entry matches, `None` if it does not.
-pub fn score_entry(mode: MatchMode, query: &BlindTokenSet, entry: &BlindTokenSet) -> Option<f64> {
+pub fn score_entry(
+    mode: MatchMode,
+    query: &BlindTokenSet,
+    entry: &BlindTokenSet,
+    thresholds: ScoreThresholds,
+) -> Option<f64> {
     match mode {
         MatchMode::Exact => score_exact(query, entry),
         MatchMode::Contains => score_contains(query, entry),
-        MatchMode::Prefix => score_trigram_overlap(query, entry, 0.6),
-        MatchMode::Fuzzy => score_trigram_overlap(query, entry, 0.3),
+        MatchMode::Prefix => score_trigram_overlap(query, entry, thresholds.prefix),
+        MatchMode::Fuzzy => score_trigram_overlap(query, entry, thresholds.fuzzy),
     }
 }
 
@@ -104,7 +129,9 @@ mod tests {
         let query = blind(&key, "hello world");
         let entry = blind(&key, "hello world foo");
 
-        assert!(score_entry(MatchMode::Exact, &query, &entry).is_some());
+        assert!(
+            score_entry(MatchMode::Exact, &query, &entry, ScoreThresholds::default(),).is_some()
+        );
     }
 
     #[test]
@@ -113,7 +140,9 @@ mod tests {
         let query = blind(&key, "hello world");
         let entry = blind(&key, "goodbye planet");
 
-        assert!(score_entry(MatchMode::Exact, &query, &entry).is_none());
+        assert!(
+            score_entry(MatchMode::Exact, &query, &entry, ScoreThresholds::default(),).is_none()
+        );
     }
 
     #[test]
@@ -123,7 +152,9 @@ mod tests {
         let entry = blind(&key, "hello foo");
 
         // Only "hello" matches, not "world" — exact requires all
-        assert!(score_entry(MatchMode::Exact, &query, &entry).is_none());
+        assert!(
+            score_entry(MatchMode::Exact, &query, &entry, ScoreThresholds::default(),).is_none()
+        );
     }
 
     #[test]
@@ -132,7 +163,13 @@ mod tests {
         let query = blind(&key, "hello world");
         let entry = blind(&key, "hello foo");
 
-        let score = score_entry(MatchMode::Contains, &query, &entry).unwrap();
+        let score = score_entry(
+            MatchMode::Contains,
+            &query,
+            &entry,
+            ScoreThresholds::default(),
+        )
+        .unwrap();
         assert!((score - 0.5).abs() < 0.01); // 1 of 2 words matched
     }
 
@@ -142,7 +179,15 @@ mod tests {
         let query = blind(&key, "hello");
         let entry = blind(&key, "goodbye");
 
-        assert!(score_entry(MatchMode::Contains, &query, &entry).is_none());
+        assert!(
+            score_entry(
+                MatchMode::Contains,
+                &query,
+                &entry,
+                ScoreThresholds::default(),
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -151,7 +196,7 @@ mod tests {
         let query = blind(&key, "hello");
         let entry = blind(&key, "hellow"); // shares trigrams hel, ell, llo
 
-        let score = score_entry(MatchMode::Fuzzy, &query, &entry);
+        let score = score_entry(MatchMode::Fuzzy, &query, &entry, ScoreThresholds::default());
         assert!(score.is_some(), "fuzzy should match similar words");
     }
 
@@ -162,7 +207,12 @@ mod tests {
         // "hel" has no trigrams (len=3 produces one: "hel")
         let entry = blind(&key, "hello"); // shares "hel" trigram
 
-        let score = score_entry(MatchMode::Prefix, &query, &entry);
+        let score = score_entry(
+            MatchMode::Prefix,
+            &query,
+            &entry,
+            ScoreThresholds::default(),
+        );
         assert!(score.is_some(), "prefix should match shared start");
     }
 }
