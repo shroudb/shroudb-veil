@@ -512,7 +512,7 @@ impl<S: Store> IndexManager<S> {
     ) -> Result<(), VeilError> {
         let ns = inv_namespace(index_name);
         for token in tokens.words.iter().chain(tokens.trigrams.iter()) {
-            let mut ids = self.inv_load_posting(&ns, token).await;
+            let mut ids = self.inv_load_posting(&ns, token).await?;
             if !ids.contains(&entry_id.to_string()) {
                 ids.push(entry_id.to_string());
                 self.inv_save_posting(&ns, token, &ids).await?;
@@ -530,10 +530,13 @@ impl<S: Store> IndexManager<S> {
     ) -> Result<(), VeilError> {
         let ns = inv_namespace(index_name);
         for token in tokens.words.iter().chain(tokens.trigrams.iter()) {
-            let mut ids = self.inv_load_posting(&ns, token).await;
+            let mut ids = self.inv_load_posting(&ns, token).await?;
             ids.retain(|id| id != entry_id);
             if ids.is_empty() {
-                let _ = self.store.delete(&ns, token.as_bytes()).await;
+                self.store
+                    .delete(&ns, token.as_bytes())
+                    .await
+                    .map_err(|e| VeilError::Store(e.to_string()))?;
             } else {
                 self.inv_save_posting(&ns, token, &ids).await?;
             }
@@ -541,16 +544,25 @@ impl<S: Store> IndexManager<S> {
         Ok(())
     }
 
-    /// Look up entry IDs that contain the given token.
-    pub async fn inv_lookup(&self, index_name: &str, token: &str) -> Vec<String> {
+    /// Look up entry IDs that contain the given token. Returns an error if
+    /// the posting list exists but is corrupt (e.g. not valid JSON) — a
+    /// silent empty-vector fallback would mask index damage.
+    pub async fn inv_lookup(
+        &self,
+        index_name: &str,
+        token: &str,
+    ) -> Result<Vec<String>, VeilError> {
         let ns = inv_namespace(index_name);
         self.inv_load_posting(&ns, token).await
     }
 
-    async fn inv_load_posting(&self, ns: &str, token: &str) -> Vec<String> {
+    async fn inv_load_posting(&self, ns: &str, token: &str) -> Result<Vec<String>, VeilError> {
         match self.store.get(ns, token.as_bytes(), None).await {
-            Ok(entry) => serde_json::from_slice(&entry.value).unwrap_or_default(),
-            Err(_) => Vec::new(),
+            Ok(entry) => serde_json::from_slice(&entry.value).map_err(|e| {
+                VeilError::Internal(format!("posting list at {ns}/{token} is corrupt: {e}"))
+            }),
+            // A missing posting list is the normal "no hits" case.
+            Err(_) => Ok(Vec::new()),
         }
     }
 
@@ -851,6 +863,36 @@ mod tests {
         mgr.create("rotate-ver").await.unwrap();
         let rotated = mgr.rotate("rotate-ver").await.unwrap();
         assert_eq!(rotated.tokenizer_version, TOKENIZER_VERSION);
+    }
+
+    /// F-veil-7: `inv_load_posting` used `unwrap_or_default()` when
+    /// deserializing a posting list, and `inv_remove` used `let _ = ...`
+    /// on the delete. Both swallow errors silently — a corrupt posting
+    /// list looks identical to an empty one, letting search return zero
+    /// hits for tokens whose posting list has been tampered with. Lookup
+    /// must surface the deserialization error.
+    #[tokio::test]
+    async fn debt_7_inv_lookup_must_surface_corrupt_posting_list() {
+        let store = shroudb_storage::test_util::create_test_store("veil-debt-7").await;
+        let mgr = IndexManager::new(store.clone());
+        mgr.init().await.unwrap();
+        mgr.create("idx").await.unwrap();
+
+        // Plant a garbage posting list directly in the inverted namespace.
+        // A well-formed posting list is a JSON array of strings; "not json"
+        // is neither, so deserialization must fail.
+        let ns = inv_namespace("idx");
+        store
+            .put(&ns, b"some-token", b"not json", None)
+            .await
+            .unwrap();
+
+        let result = mgr.inv_lookup("idx", "some-token").await;
+        assert!(
+            result.is_err(),
+            "inv_lookup must propagate deserialization failures — a corrupt \
+             posting list silently returning an empty Vec hides index damage",
+        );
     }
 
     mod fuzz {

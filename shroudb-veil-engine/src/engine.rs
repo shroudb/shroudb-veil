@@ -772,7 +772,7 @@ impl<S: Store> VeilEngine<S> {
                 }
                 let mut sets: Vec<HashSet<String>> = Vec::new();
                 for token in &query_blind.words {
-                    let ids = self.indexes.inv_lookup(index_name, token).await;
+                    let ids = self.indexes.inv_lookup(index_name, token).await?;
                     sets.push(ids.into_iter().collect());
                 }
                 let mut result = sets.remove(0);
@@ -785,7 +785,7 @@ impl<S: Store> VeilEngine<S> {
                 // Union of all query word posting lists
                 let mut result = HashSet::new();
                 for token in &query_blind.words {
-                    let ids = self.indexes.inv_lookup(index_name, token).await;
+                    let ids = self.indexes.inv_lookup(index_name, token).await?;
                     result.extend(ids);
                 }
                 result
@@ -796,14 +796,14 @@ impl<S: Store> VeilEngine<S> {
                     // Fall back to word-based contains
                     let mut result = HashSet::new();
                     for token in &query_blind.words {
-                        let ids = self.indexes.inv_lookup(index_name, token).await;
+                        let ids = self.indexes.inv_lookup(index_name, token).await?;
                         result.extend(ids);
                     }
                     result
                 } else {
                     let mut result = HashSet::new();
                     for token in &query_blind.trigrams {
-                        let ids = self.indexes.inv_lookup(index_name, token).await;
+                        let ids = self.indexes.inv_lookup(index_name, token).await?;
                         result.extend(ids);
                     }
                     result
