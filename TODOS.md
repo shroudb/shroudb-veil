@@ -18,7 +18,7 @@ Rules:
 ### Open
 
 - [x] **DEBT-1** — PUT must forward caller actor identity to Sentry. Test: `debt_1_put_must_forward_actor_identity_to_sentry` @ `shroudb-veil-engine/src/engine.rs`.
-- [ ] **DEBT-2** — audit must record real actor, not `"anonymous"` sentinel. Test: `debt_2_audit_event_must_record_real_actor_not_anonymous` @ same file.
+- [x] **DEBT-2** — audit must record real actor, not `"anonymous"` sentinel. Test: `debt_2_audit_event_must_record_real_actor_not_anonymous` @ same file.
 - [ ] **DEBT-3** — SEARCH must fail-closed when Chronicle is unreachable (parity with other ops). Test: `debt_3_search_must_fail_closed_when_chronicle_unreachable` @ same file.
 - [ ] **DEBT-4** — engine must reject missing Chronicle in enforcing mode. Test: `debt_4_engine_must_reject_missing_chronicle_in_enforcing_mode` @ same file.
 - [ ] **DEBT-5** — search prefix/fuzzy score thresholds must be configurable (currently hardcoded 0.6 / 0.3 in `search.rs:23,24`). Test: `debt_5_search_score_thresholds_must_be_configurable` @ same file.

@@ -240,7 +240,7 @@ impl<S: Store> VeilEngine<S> {
         let start = Instant::now();
         self.check_policy(name, "index_create", actor).await?;
         let idx = self.indexes.create(name).await?;
-        self.emit_audit_event("INDEX_CREATE", name, EventResult::Ok, None, start)
+        self.emit_audit_event("INDEX_CREATE", name, EventResult::Ok, actor, start)
             .await?;
         Ok(IndexInfoResult {
             name: idx.name.clone(),
@@ -258,7 +258,7 @@ impl<S: Store> VeilEngine<S> {
         let start = Instant::now();
         self.check_policy(name, "index_rotate", actor).await?;
         let idx = self.indexes.rotate(name).await?;
-        self.emit_audit_event("INDEX_ROTATE", name, EventResult::Ok, None, start)
+        self.emit_audit_event("INDEX_ROTATE", name, EventResult::Ok, actor, start)
             .await?;
         Ok(IndexInfoResult {
             name: idx.name.clone(),
@@ -272,7 +272,7 @@ impl<S: Store> VeilEngine<S> {
         let start = Instant::now();
         self.check_policy(name, "index_destroy", actor).await?;
         let deleted = self.indexes.destroy(name).await?;
-        self.emit_audit_event("INDEX_DESTROY", name, EventResult::Ok, None, start)
+        self.emit_audit_event("INDEX_DESTROY", name, EventResult::Ok, actor, start)
             .await?;
         Ok(deleted)
     }
@@ -300,7 +300,7 @@ impl<S: Store> VeilEngine<S> {
         let start = Instant::now();
         self.check_policy(name, "index_reindex", actor).await?;
         let (idx, deleted) = self.indexes.reindex(name).await?;
-        self.emit_audit_event("INDEX_REINDEX", name, EventResult::Ok, None, start)
+        self.emit_audit_event("INDEX_REINDEX", name, EventResult::Ok, actor, start)
             .await?;
         Ok(IndexReindexResult {
             name: idx.name.clone(),
@@ -442,7 +442,7 @@ impl<S: Store> VeilEngine<S> {
         }
 
         let resource = format!("{index_name}/{id}");
-        self.emit_audit_event("PUT", &resource, EventResult::Ok, None, start)
+        self.emit_audit_event("PUT", &resource, EventResult::Ok, actor, start)
             .await?;
         Ok(version)
     }
@@ -483,7 +483,7 @@ impl<S: Store> VeilEngine<S> {
         }
 
         let resource = format!("{index_name}/{id}");
-        self.emit_audit_event("DELETE", &resource, EventResult::Ok, None, start)
+        self.emit_audit_event("DELETE", &resource, EventResult::Ok, actor, start)
             .await?;
         Ok(())
     }
@@ -499,7 +499,7 @@ impl<S: Store> VeilEngine<S> {
         &self,
         index_name: &str,
         valid_entry_ids: &[String],
-        _actor: Option<&str>,
+        actor: Option<&str>,
     ) -> Result<ReconcileResult, VeilError> {
         let start = Instant::now();
         let _ = self.indexes.get(index_name)?;
@@ -538,7 +538,7 @@ impl<S: Store> VeilEngine<S> {
         }
 
         let resource = format!("{index_name}/*");
-        self.emit_audit_event("RECONCILE", &resource, EventResult::Ok, None, start)
+        self.emit_audit_event("RECONCILE", &resource, EventResult::Ok, actor, start)
             .await?;
 
         Ok(ReconcileResult { orphans_removed })
@@ -600,7 +600,7 @@ impl<S: Store> VeilEngine<S> {
             .await?;
 
         let _ = self
-            .emit_audit_event("SEARCH", index_name, EventResult::Ok, None, start)
+            .emit_audit_event("SEARCH", index_name, EventResult::Ok, actor, start)
             .await;
         Ok(result)
     }
@@ -2301,9 +2301,16 @@ mod debt_tests {
         let (chron, events) = RecordingChronicle::new();
         let engine =
             setup_with_caps(Capability::DisabledForTests, Capability::Enabled(chron)).await;
-        engine.index_create("users", None).await.unwrap();
+        engine.index_create("users", Some("admin")).await.unwrap();
         engine
-            .put("users", "e1", &STANDARD.encode("alice"), None, false, None)
+            .put(
+                "users",
+                "e1",
+                &STANDARD.encode("alice"),
+                None,
+                false,
+                Some("alice-caller"),
+            )
             .await
             .unwrap();
 
