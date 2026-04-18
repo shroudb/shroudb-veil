@@ -8,3 +8,6 @@ pub mod engine;
 pub mod hmac_ops;
 pub mod index_manager;
 pub mod search;
+
+#[cfg(test)]
+mod test_support;

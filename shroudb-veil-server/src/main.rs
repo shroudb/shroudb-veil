@@ -73,8 +73,8 @@ async fn main() -> anyhow::Result<()> {
                 shroudb_server_bootstrap::open_storage(&cfg.store.data_dir, key_source.as_ref())
                     .await
                     .context("failed to open storage engine")?;
-            let store = Arc::new(shroudb_storage::EmbeddedStore::new(storage, "veil"));
-            run_server(cfg, store).await
+            let store = Arc::new(shroudb_storage::EmbeddedStore::new(storage.clone(), "veil"));
+            run_server(cfg, store, Some(storage)).await
         }
         "remote" => {
             let uri = cfg
@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
                     .await
                     .context("failed to connect to remote store")?,
             );
-            run_server(cfg, store).await
+            run_server(cfg, store, None).await
         }
         other => anyhow::bail!("unknown store mode: {other}"),
     }
@@ -97,14 +97,41 @@ async fn main() -> anyhow::Result<()> {
 async fn run_server<S: Store + 'static>(
     cfg: VeilServerConfig,
     store: Arc<S>,
+    storage: Option<Arc<shroudb_storage::StorageEngine>>,
 ) -> anyhow::Result<()> {
+    // Resolve [audit] and [policy] capabilities — no silent None.
+    let audit_cfg = cfg.audit.clone().ok_or_else(|| {
+        anyhow::anyhow!(
+            "missing [audit] config section. Pick one:\n  \
+             [audit] mode = \"remote\" addr = \"chronicle.internal:7300\"\n  \
+             [audit] mode = \"embedded\"\n  \
+             [audit] mode = \"disabled\" justification = \"<reason>\""
+        )
+    })?;
+    let audit_cap = audit_cfg
+        .resolve(storage.clone())
+        .await
+        .context("failed to resolve [audit] capability")?;
+    let policy_cfg = cfg.policy.clone().ok_or_else(|| {
+        anyhow::anyhow!(
+            "missing [policy] config section. Pick one:\n  \
+             [policy] mode = \"remote\" addr = \"sentry.internal:7100\"\n  \
+             [policy] mode = \"embedded\"\n  \
+             [policy] mode = \"disabled\" justification = \"<reason>\""
+        )
+    })?;
+    let policy_cap = policy_cfg
+        .resolve(storage.clone(), audit_cap.as_ref().cloned())
+        .await
+        .context("failed to resolve [policy] capability")?;
+
     // Veil engine
     let veil_config = VeilConfig {
         default_result_limit: cfg.engine.default_result_limit,
         ..Default::default()
     };
     let engine = Arc::new(
-        VeilEngine::new(store, veil_config, None, None)
+        VeilEngine::new(store, veil_config, policy_cap, audit_cap)
             .await
             .context("failed to initialize veil engine")?,
     );
@@ -188,4 +215,21 @@ async fn run_server<S: Store + 'static>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_debug_asserts() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn cli_accepts_config_flag() {
+        let parsed = Cli::try_parse_from(["shroudb-veil", "--config", "veil.toml"]).unwrap();
+        assert_eq!(parsed.config.as_deref(), Some("veil.toml"));
+    }
 }

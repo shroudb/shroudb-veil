@@ -9,6 +9,7 @@ use shroudb_acl::{PolicyEffect, PolicyEvaluator, PolicyPrincipal, PolicyRequest,
 use shroudb_chronicle_core::event::{Engine as AuditEngine, Event, EventResult};
 use shroudb_chronicle_core::ops::ChronicleOps;
 use shroudb_crypto::SecretBytes;
+use shroudb_server_bootstrap::Capability;
 use shroudb_store::Store;
 use shroudb_veil_core::error::VeilError;
 use shroudb_veil_core::matching::MatchMode;
@@ -112,17 +113,22 @@ pub struct IndexReindexResult {
 pub struct VeilEngine<S: Store> {
     pub(crate) indexes: IndexManager<S>,
     pub(crate) config: VeilConfig,
-    policy_evaluator: Option<Arc<dyn PolicyEvaluator>>,
-    chronicle: Option<Arc<dyn ChronicleOps>>,
+    policy_evaluator: Capability<Arc<dyn PolicyEvaluator>>,
+    chronicle: Capability<Arc<dyn ChronicleOps>>,
 }
 
 impl<S: Store> VeilEngine<S> {
     /// Create a new Veil engine.
+    ///
+    /// Every capability slot is explicit: `Capability::Enabled(...)`,
+    /// `Capability::DisabledForTests`, or
+    /// `Capability::DisabledWithJustification("<reason>")`. Absence is
+    /// never silent — operators must name why they're opting out.
     pub async fn new(
         store: Arc<S>,
         config: VeilConfig,
-        policy_evaluator: Option<Arc<dyn PolicyEvaluator>>,
-        chronicle: Option<Arc<dyn ChronicleOps>>,
+        policy_evaluator: Capability<Arc<dyn PolicyEvaluator>>,
+        chronicle: Capability<Arc<dyn ChronicleOps>>,
     ) -> Result<Self, VeilError> {
         let indexes = IndexManager::new(store);
         indexes.init().await?;
@@ -140,7 +146,7 @@ impl<S: Store> VeilEngine<S> {
         action: &str,
         actor: Option<&str>,
     ) -> Result<(), VeilError> {
-        let Some(evaluator) = &self.policy_evaluator else {
+        let Some(evaluator) = self.policy_evaluator.as_ref() else {
             return Ok(());
         };
         let request = PolicyRequest {
@@ -181,7 +187,7 @@ impl<S: Store> VeilEngine<S> {
         actor: Option<&str>,
         start: Instant,
     ) -> Result<(), VeilError> {
-        let Some(chronicle) = &self.chronicle else {
+        let Some(chronicle) = self.chronicle.as_ref() else {
             return Ok(());
         };
         let mut event = Event::new(
@@ -772,9 +778,14 @@ mod tests {
 
     async fn setup() -> VeilEngine<shroudb_storage::EmbeddedStore> {
         let store = shroudb_storage::test_util::create_test_store("veil-test").await;
-        VeilEngine::new(store, VeilConfig::default(), None, None)
-            .await
-            .unwrap()
+        VeilEngine::new(
+            store,
+            VeilConfig::default(),
+            Capability::DisabledForTests,
+            Capability::DisabledForTests,
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -1128,9 +1139,14 @@ mod tests {
         }
 
         let store = shroudb_storage::test_util::create_test_store("veil-policy-test").await;
-        let engine = VeilEngine::new(store, VeilConfig::default(), Some(Arc::new(DenyAll)), None)
-            .await
-            .unwrap();
+        let engine = VeilEngine::new(
+            store,
+            VeilConfig::default(),
+            Capability::Enabled(Arc::new(DenyAll)),
+            Capability::DisabledForTests,
+        )
+        .await
+        .unwrap();
 
         // index_create should be denied by policy
         let err = engine.index_create("test").await;
@@ -1200,7 +1216,14 @@ mod tests {
             max_entries_per_index: 3,
             ..Default::default()
         };
-        let engine = VeilEngine::new(store, config, None, None).await.unwrap();
+        let engine = VeilEngine::new(
+            store,
+            config,
+            Capability::DisabledForTests,
+            Capability::DisabledForTests,
+        )
+        .await
+        .unwrap();
         engine.index_create("limited").await.unwrap();
 
         // Insert 3 entries — all should succeed
@@ -1363,7 +1386,14 @@ mod tests {
             max_entries_per_index: 2,
             ..Default::default()
         };
-        let engine = VeilEngine::new(store, config, None, None).await.unwrap();
+        let engine = VeilEngine::new(
+            store,
+            config,
+            Capability::DisabledForTests,
+            Capability::DisabledForTests,
+        )
+        .await
+        .unwrap();
         engine.index_create("limited").await.unwrap();
 
         let client_key = [0x42u8; 32];
@@ -1833,5 +1863,213 @@ mod tests {
         // Entry count should still be 1 (update, not new)
         let info = engine.index_info("inv-update").await.unwrap();
         assert_eq!(info.entry_count, 1);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDIT_2026-04-17 — Hard-ratchet debt tests for Veil half-assed wiring.
+//
+// These tests encode the correct security behavior of the engine's Sentry
+// and Chronicle capability integration. They are expected to FAIL against
+// the current implementation. They must NOT be `#[ignore]`-d. Fix the code
+// to make them pass; do NOT relax the tests.
+// ═══════════════════════════════════════════════════════════════════════════
+#[cfg(test)]
+mod debt_tests {
+    use super::*;
+    use crate::test_support::{FailingChronicle, RecordingChronicle, RecordingSentry};
+
+    async fn setup_with_caps(
+        policy: Capability<Arc<dyn PolicyEvaluator>>,
+        chron: Capability<Arc<dyn ChronicleOps>>,
+    ) -> VeilEngine<shroudb_storage::EmbeddedStore> {
+        let store = shroudb_storage::test_util::create_test_store("veil-debt").await;
+        VeilEngine::new(store, VeilConfig::default(), policy, chron)
+            .await
+            .unwrap()
+    }
+
+    /// F-veil-1: engine::put/search/delete/index_* ALL call `check_policy`
+    /// with `actor = None`. The engine has no way to receive caller identity,
+    /// so every PolicyRequest.principal.id is empty. Sentry cannot make
+    /// real access decisions without a principal.
+    #[tokio::test]
+    async fn debt_1_put_must_forward_actor_identity_to_sentry() {
+        let (sentry, requests) = RecordingSentry::new();
+        let engine =
+            setup_with_caps(Capability::Enabled(sentry), Capability::DisabledForTests).await;
+        engine.index_create("users").await.unwrap();
+
+        // Clear the create event.
+        requests.lock().unwrap().clear();
+
+        engine
+            .put("users", "e1", &STANDARD.encode("alice"), None, false)
+            .await
+            .unwrap();
+
+        let reqs = requests.lock().unwrap();
+        let put_req = reqs
+            .iter()
+            .find(|r| r.action == "put")
+            .expect("engine must issue a put policy request");
+        assert!(
+            !put_req.principal.id.is_empty(),
+            "engine.put must forward the caller's actor id to Sentry, got empty id. \
+             The engine signature currently has no way to receive actor identity \
+             from the protocol/HTTP dispatch layer — this is the root bug."
+        );
+    }
+
+    /// F-veil-2: emit_audit_event hardcodes `actor = None` at every call site
+    /// in engine.rs. Every audit event Chronicle receives has
+    /// actor="anonymous", making tamper-evident logs worthless for forensics.
+    #[tokio::test]
+    async fn debt_2_audit_event_must_record_real_actor_not_anonymous() {
+        let (chron, events) = RecordingChronicle::new();
+        let engine =
+            setup_with_caps(Capability::DisabledForTests, Capability::Enabled(chron)).await;
+        engine.index_create("users").await.unwrap();
+        engine
+            .put("users", "e1", &STANDARD.encode("alice"), None, false)
+            .await
+            .unwrap();
+
+        let evs = events.lock().unwrap();
+        let put_evt = evs
+            .iter()
+            .find(|e| e.operation == "PUT")
+            .expect("engine.put must emit a PUT audit event");
+        assert_ne!(
+            put_evt.actor, "anonymous",
+            "engine.put must forward the caller's actor id to Chronicle; \
+             defaulting to 'anonymous' destroys forensic value"
+        );
+        assert!(!put_evt.actor.is_empty(), "audit actor must not be empty");
+    }
+
+    /// F-veil-3: search() line 549 uses `let _ = ... emit_audit_event(...)`
+    /// silently swallowing Chronicle errors. All other operations propagate
+    /// audit-sink failures, but search fails open — an attacker who takes
+    /// down Chronicle can issue un-audited reads.
+    #[tokio::test]
+    async fn debt_3_search_must_fail_closed_when_chronicle_unreachable() {
+        // Seed index + entry on a store with NO chronicle so PUT succeeds.
+        let store = shroudb_storage::test_util::create_test_store("veil-debt-3").await;
+        {
+            let seed = VeilEngine::new(
+                store.clone(),
+                VeilConfig::default(),
+                Capability::DisabledForTests,
+                Capability::DisabledForTests,
+            )
+            .await
+            .unwrap();
+            seed.index_create("idx").await.unwrap();
+            seed.put("idx", "e1", &STANDARD.encode("hello"), None, false)
+                .await
+                .unwrap();
+        }
+
+        // Reopen the SAME store with a failing chronicle and issue SEARCH.
+        let engine = VeilEngine::new(
+            store,
+            VeilConfig::default(),
+            Capability::DisabledForTests,
+            Capability::Enabled(FailingChronicle::new()),
+        )
+        .await
+        .unwrap();
+
+        let result = engine
+            .search("idx", "hello", MatchMode::Exact, None, None, false)
+            .await;
+        assert!(
+            result.is_err(),
+            "search must fail closed when Chronicle is configured but unreachable; \
+             the current `let _ = emit_audit_event(...)` swallows the error and \
+             returns hits un-audited"
+        );
+    }
+
+    /// F-veil-4: VeilServerConfig has no `[sentry]` or `[chronicle]` section
+    /// and server/main.rs hardcodes `VeilEngine::new(store, veil_config, None, None)`.
+    /// The engine *accepts* capabilities in its constructor but the binary
+    /// never populates them — production deploys are silently running with
+    /// no policy enforcement and no audit sink.
+    ///
+    /// Encoded here as a structural check: the server config must expose
+    /// knobs for sentry_url / chronicle_url (the actual wiring lives in
+    /// shroudb-veil-server and cannot be tested from the engine crate, so
+    /// this test documents the debt via a compile-time assertion that the
+    /// PolicyEvaluator trait object is the only accepted capability shape —
+    /// if no test fails we would have no ratchet).
+    #[tokio::test]
+    async fn debt_4_engine_must_reject_missing_chronicle_in_enforcing_mode() {
+        // Once the config/server wiring is added, a VeilConfig flag like
+        // `require_audit: true` must make construction fail when
+        // chronicle = None. Today VeilConfig has no such flag.
+        let has_require_audit_flag = {
+            // Reflect: try to construct a config with a hypothetical flag.
+            // Because no such field exists, we force the test to fail by
+            // asserting on an invariant the code does not yet satisfy.
+            let _cfg = VeilConfig::default();
+            false
+        };
+        assert!(
+            has_require_audit_flag,
+            "VeilConfig must expose a `require_audit`/`require_policy` flag that \
+             fails engine construction when Chronicle/Sentry are absent. Today \
+             the server binary passes `None, None` and the engine silently \
+             accepts it — security capabilities declared in the type signature \
+             are never populated in production."
+        );
+    }
+
+    /// F-veil-5: search scoring thresholds (Prefix 0.6, Fuzzy 0.3) are
+    /// hardcoded in search.rs. A deployer cannot tune relevance without
+    /// recompiling, and there is no way to audit the chosen values. Policy
+    /// should be explicit.
+    #[tokio::test]
+    async fn debt_5_search_score_thresholds_must_be_configurable() {
+        let cfg = VeilConfig::default();
+        // VeilConfig must expose `prefix_threshold` and `fuzzy_threshold`.
+        // These fields do not yet exist. Replace the hardcoded constants
+        // in search::score_entry with config-driven values.
+        let has_configurable_thresholds = false;
+        let _ = cfg;
+        assert!(
+            has_configurable_thresholds,
+            "VeilConfig must expose `prefix_threshold` and `fuzzy_threshold` \
+             fields consumed by search::score_entry. Today they are hardcoded \
+             to 0.6 / 0.3 in search.rs."
+        );
+    }
+
+    /// F-veil-6: When `blind=true`, the server accepts any base64-encoded
+    /// JSON with `words:[]` / `trigrams:[]` keys. There is no structural
+    /// validation that the strings are plausible HMAC outputs (e.g., 64-char
+    /// hex). An attacker can poison an E2EE index with garbage tokens that
+    /// will never match anything, causing silent search-result denial.
+    #[tokio::test]
+    async fn debt_6_blind_put_must_reject_non_hex_tokens() {
+        let engine =
+            setup_with_caps(Capability::DisabledForTests, Capability::DisabledForTests).await;
+        engine.index_create("e2ee").await.unwrap();
+
+        // Malformed token set: not hex, not 64 chars.
+        let bad = serde_json::json!({
+            "words": ["notHex!!", "alsoBad"],
+            "trigrams": ["<script>", ""]
+        });
+        let payload = STANDARD.encode(serde_json::to_vec(&bad).unwrap());
+
+        let result = engine.put("e2ee", "m1", &payload, None, true).await;
+        assert!(
+            result.is_err(),
+            "blind PUT must reject token sets whose strings are not 64-char \
+             lowercase hex (SHA-256 HMAC output shape). Today the server \
+             stores arbitrary JSON strings without structural validation."
+        );
     }
 }
