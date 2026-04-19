@@ -70,6 +70,3 @@ base64 = "0.22"
 dashmap = "6"
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors"] }
-
-[patch.shroudb]
-shroudb-engine-bootstrap = { path = "/Users/nlucas/dev/shroudb/commons/shroudb-engine-bootstrap" }
