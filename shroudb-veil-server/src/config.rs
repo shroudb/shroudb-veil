@@ -15,10 +15,18 @@ pub struct VeilServerConfig {
     pub engine: EngineConfig,
     #[serde(default)]
     pub auth: ServerAuthConfig,
-    /// Audit (Chronicle) capability slot. Absent = fail-closed at startup.
+    /// Audit (Chronicle) capability slot. When the section is absent the
+    /// server uses `AuditConfig::default()` from `shroudb-engine-bootstrap`,
+    /// which resolves to an embedded Chronicle sink on the shared storage.
+    /// Operators that require an `Enabled` Chronicle regardless of the
+    /// default keep `engine.require_audit = true` (the engine-level knob).
     #[serde(default)]
     pub audit: Option<AuditConfig>,
-    /// Policy (Sentry) capability slot. Same contract.
+    /// Policy (Sentry) capability slot. When the section is absent the
+    /// server uses `PolicyConfig::default()` from `shroudb-engine-bootstrap`,
+    /// which resolves to an embedded Sentry evaluator on the shared storage.
+    /// Operators that require an `Enabled` Sentry regardless of the default
+    /// keep `engine.require_policy = true` (the engine-level knob).
     #[serde(default)]
     pub policy: Option<PolicyConfig>,
 }

@@ -112,12 +112,16 @@ and emits audit `Event` records tagged `AuditEngine::Veil` from
 
 **Explicit capability slots, no silent None.** `policy_evaluator` and
 `chronicle` on `VeilEngine::new` are both `Capability<T>`, which the server
-binary must resolve from explicit `[audit]` and `[policy]` config sections —
-each section requires a `mode` of `"remote"`, `"embedded"`, or `"disabled"`,
-and `"disabled"` requires a named `justification`. Absence of a config
-section is a startup error, not a silent no-op. Tests use
-`Capability::DisabledForTests`; production disables go through
-`Capability::DisabledWithJustification("<reason>")`.
+binary resolves from the `[audit]` and `[policy]` config sections. Each
+section takes a `mode` of `"remote"`, `"embedded"`, or `"disabled"`, and
+`"disabled"` requires a named `justification`. When a section is omitted
+the server defaults to the embedded mode from
+`shroudb-engine-bootstrap` — Chronicle and Sentry run in-process on the
+same storage. To refuse start-up unless Chronicle/Sentry actually resolve
+to `Enabled`, keep `engine.require_audit = true` /
+`engine.require_policy = true`; that engine-level knob composes with the
+bootstrap default. Tests use `Capability::DisabledForTests`; production
+disables go through `Capability::DisabledWithJustification("<reason>")`.
 
 **What breaks when disabled.** If `chronicle` resolves to `Disabled*`,
 `emit_audit_event` returns `Ok(())` without recording: indexing, tokenization,
@@ -202,11 +206,13 @@ crates, which lets Sigil (or any ShrouDB SDK) embed it cheaply.
   RESP3 over TCP, and optionally exposes the REST-style HTTP API from
   `protocol.toml` (`/index/create`, `/put`, `/search`, `/tokenize`,
   `/health`, etc.) when `server.http_bind` / `--http-bind` /
-  `VEIL_HTTP_BIND` is set. The config file must declare `[audit]` and
+  `VEIL_HTTP_BIND` is set. The config file may declare `[audit]` and
   `[policy]` sections; each resolves to a `Capability<T>` slot that is
-  passed to `VeilEngine::new`. A deploy that genuinely does not want an
-  audit sink or policy evaluator must set `mode = "disabled"` and provide
-  a `justification` — silent `None` is not accepted.
+  passed to `VeilEngine::new`. When a section is omitted the server falls
+  back to the embedded default from `shroudb-engine-bootstrap`. A deploy
+  that genuinely does not want an audit sink or policy evaluator must set
+  `mode = "disabled"` and provide a `justification` — silent `None` is
+  not accepted in the resolved capability.
 - **Embedded in Moat.** Moat pulls in `shroudb-veil-engine` and
   `shroudb-veil-protocol` directly, sharing the same process and storage
   layer as the other ShrouDB engines. Because `VeilEngine` is generic over

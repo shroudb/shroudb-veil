@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.8.1"
+version = "1.9.0"
 edition = "2024"
 rust-version = "1.92"
 license = "LicenseRef-Proprietary"
@@ -20,11 +20,11 @@ publish = ["shroudb"]
 
 [workspace.dependencies]
 # Internal crates
-shroudb-veil-core = { path = "shroudb-veil-core", version = "1.8.1", registry = "shroudb" }
-shroudb-veil-engine = { path = "shroudb-veil-engine", version = "1.8.1", registry = "shroudb" }
-shroudb-veil-protocol = { path = "shroudb-veil-protocol", version = "1.8.1", registry = "shroudb" }
-shroudb-veil-client = { path = "shroudb-veil-client", version = "1.8.1", registry = "shroudb" }
-shroudb-veil-blind = { path = "shroudb-veil-blind", version = "1.8.1", registry = "shroudb" }
+shroudb-veil-core = { path = "shroudb-veil-core", version = "1.9.0", registry = "shroudb" }
+shroudb-veil-engine = { path = "shroudb-veil-engine", version = "1.9.0", registry = "shroudb" }
+shroudb-veil-protocol = { path = "shroudb-veil-protocol", version = "1.9.0", registry = "shroudb" }
+shroudb-veil-client = { path = "shroudb-veil-client", version = "1.9.0", registry = "shroudb" }
+shroudb-veil-blind = { path = "shroudb-veil-blind", version = "1.9.0", registry = "shroudb" }
 
 # ShrouDB commons (shroudb registry)
 shroudb-store = { version = "0.2.0", registry = "shroudb" }
@@ -36,7 +36,7 @@ shroudb-chronicle-core = { version = "1.11.0", registry = "shroudb" }
 shroudb-protocol-wire = { version = "0.2.0", registry = "shroudb" }
 shroudb-server-tcp = { version = "0.2.2", registry = "shroudb" }
 shroudb-server-bootstrap = { version = "0.2.0", registry = "shroudb" }
-shroudb-engine-bootstrap = { version = "0.1.0", registry = "shroudb" }
+shroudb-engine-bootstrap = { version = "0.3.0", registry = "shroudb" }
 shroudb-client = { version = "1.1.0", registry = "shroudb" }
 shroudb-client-common = { version = "0.2.0", registry = "shroudb" }
 
@@ -70,3 +70,6 @@ base64 = "0.22"
 dashmap = "6"
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors"] }
+
+[patch.shroudb]
+shroudb-engine-bootstrap = { path = "/Users/nlucas/dev/shroudb/commons/shroudb-engine-bootstrap" }
