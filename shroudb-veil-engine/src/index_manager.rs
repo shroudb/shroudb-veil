@@ -533,10 +533,15 @@ impl<S: Store> IndexManager<S> {
             let mut ids = self.inv_load_posting(&ns, token).await?;
             ids.retain(|id| id != entry_id);
             if ids.is_empty() {
-                self.store
-                    .delete(&ns, token.as_bytes())
-                    .await
-                    .map_err(|e| VeilError::Store(e.to_string()))?;
+                // A concurrent update to the same entry may have already
+                // deleted this empty posting; treat NotFound as idempotent
+                // success rather than surfacing a spurious "not found" error
+                // to the caller. Any other store error still fails the op.
+                match self.store.delete(&ns, token.as_bytes()).await {
+                    Ok(_) => {}
+                    Err(shroudb_store::StoreError::NotFound) => {}
+                    Err(e) => return Err(VeilError::Store(e.to_string())),
+                }
             } else {
                 self.inv_save_posting(&ns, token, &ids).await?;
             }
